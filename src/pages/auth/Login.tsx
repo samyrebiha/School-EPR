@@ -405,7 +405,7 @@ export const Login: React.FC = () => {
               color: 'var(--color-primary)',
             }}
           >
-            📄 لمزيد من التفاصيل والبنود الرسمية، <strong>كل شيء موجود في العقد الذي لديكم منه النسخة</strong>.
+            لمزيد من التفاصيل والبنود الرسمية، <strong>كل شيء موجود في العقد الذي لديكم منه النسخة</strong>.
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
             <Button variant="primary" size="sm" onClick={() => setShowPrivacyModal(false)}>
@@ -438,7 +438,7 @@ export const Login: React.FC = () => {
               color: 'var(--color-primary)',
             }}
           >
-            📄 تخضع كافة حقوق والتزامات الطرفين للاتفاقية المبرمة، و<strong>كل شيء موجود في العقد الذي لديكم منه النسخة</strong>.
+            تخضع كافة حقوق والتزامات الطرفين للاتفاقية المبرمة، و<strong>كل شيء موجود في العقد الذي لديكم منه النسخة</strong>.
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
             <Button variant="primary" size="sm" onClick={() => setShowTermsModal(false)}>

@@ -11,8 +11,11 @@ import {
   Settings,
   BookOpen,
   School,
+  GraduationCap,
 } from 'lucide-react';
 import { useSchool } from '../../contexts/SchoolContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { LogOut, ShieldAlert, UserCheck } from 'lucide-react';
 
 export interface SidebarProps {
   activePage: string;
@@ -39,14 +42,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
 }) => {
   const { currentSchool } = useSchool();
+  const { isReceptionMode, isAdminMode, switchToReception } = useAuth();
 
-  const navGroups: NavGroup[] = [
+  const allNavGroups: NavGroup[] = [
     {
       groupLabel: '',
       items: [
         {
           id: 'dashboard',
-          label: 'الرئيسية',
+          label: isReceptionMode ? 'الرئيسية (الاستقبال)' : 'الرئيسية (الإدارة)',
           icon: <LayoutDashboard size={18} />,
         },
       ],
@@ -79,44 +83,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
           label: 'الحضور والغياب',
           icon: <CheckCircle2 size={18} />,
         },
+        // Admin only: Students Management
+        ...(!isReceptionMode
+          ? [
+              {
+                id: 'students',
+                label: 'إدارة التلاميذ',
+                icon: <GraduationCap size={18} />,
+              },
+            ]
+          : []),
       ],
     },
     {
-      groupLabel: 'المالية',
+      groupLabel: 'المالية وسندات القبض',
       items: [
         {
           id: 'payments',
-          label: 'المدفوعات',
+          label: isReceptionMode ? 'تسجيل وسندات القبض' : 'المدفوعات والخزينة',
           icon: <CreditCard size={18} />,
         },
-        {
-          id: 'payroll',
-          label: 'مستحقات الأساتذة',
-          icon: <Wallet size={18} />,
-        },
+        // Admin only
+        ...(!isReceptionMode
+          ? [
+              {
+                id: 'payroll',
+                label: 'مستحقات الأساتذة',
+                icon: <Wallet size={18} />,
+              },
+            ]
+          : []),
       ],
     },
-    {
-      groupLabel: 'التحليلات',
-      items: [
-        {
-          id: 'reports',
-          label: 'التقارير والإحصائيات',
-          icon: <BarChart3 size={18} />,
-        },
-      ],
-    },
-    {
-      groupLabel: '',
-      items: [
-        {
-          id: 'settings',
-          label: 'الإعدادات',
-          icon: <Settings size={18} />,
-        },
-      ],
-    },
+    // Admin only: Analytics & Settings
+    ...(!isReceptionMode
+      ? [
+          {
+            groupLabel: 'التحليلات',
+            items: [
+              {
+                id: 'reports',
+                label: 'التقارير والإحصائيات',
+                icon: <BarChart3 size={18} />,
+              },
+            ],
+          },
+          {
+            groupLabel: '',
+            items: [
+              {
+                id: 'settings',
+                label: 'الإعدادات',
+                icon: <Settings size={18} />,
+              },
+            ],
+          },
+        ]
+      : []),
   ];
+
+  const navGroups = allNavGroups.filter((g) => g.items.length > 0);
 
   return (
     <>
@@ -137,7 +163,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div className="brand-text">
             <h2>{currentSchool.name}</h2>
-            <p>نظام الإدارة المدرسي</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
+              <span
+                style={{
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  padding: '1px 7px',
+                  borderRadius: '12px',
+                  backgroundColor: isReceptionMode ? 'var(--color-bg-surface-secondary)' : '#dbeafe',
+                  color: isReceptionMode ? 'var(--color-text-secondary)' : '#1e40af',
+                  border: isReceptionMode ? '1px solid var(--color-border)' : '1px solid #bfdbfe',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                {isReceptionMode ? (
+                  <>
+                    <UserCheck size={11} /> مكتب الاستقبال
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert size={11} /> لوحة الإدارة
+                  </>
+                )}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -178,7 +229,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
             textAlign: 'center',
           }}
         >
-          منصة إدارة المدارس والمراكز
+          {isAdminMode ? (
+            <button
+              onClick={() => {
+                switchToReception();
+                onNavigate('dashboard');
+              }}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                padding: '8px 12px',
+                backgroundColor: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: 'var(--radius-md)',
+                color: '#1e40af',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all var(--transition-fast)',
+              }}
+            >
+              <LogOut size={14} /> العودة لوضع الاستقبال
+            </button>
+          ) : (
+            <div>منصة إدارة المدارس والمراكز</div>
+          )}
         </div>
       </aside>
     </>

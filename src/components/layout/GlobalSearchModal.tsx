@@ -132,9 +132,9 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                   flexWrap: 'wrap',
                 }}
               >
-                <span>👨‍🏫 الأساتذة ({teachers.length})</span>
-                <span>📚 الدورات والأفواج ({courses.length})</span>
-                <span>💳 المدفوعات ({transactions.length})</span>
+                <span>الأساتذة ({teachers.length})</span>
+                <span>الدورات والأفواج ({courses.length})</span>
+                <span>المدفوعات ({transactions.length})</span>
               </div>
             </div>
           ) : !hasResults ? (

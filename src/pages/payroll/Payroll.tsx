@@ -7,6 +7,9 @@ import {
   Printer,
   Coins,
   Percent,
+  Trash2,
+  RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { DataTable, Column } from '../../components/data-table/DataTable';
@@ -16,19 +19,21 @@ import { Badge } from '../../components/common/Badge';
 import { Modal } from '../../components/common/Modal';
 import { Drawer } from '../../components/common/Drawer';
 import { Input, Select } from '../../components/common/Input';
-import { Teacher } from '../../types';
-import { formatDZD, formatDateArabic, formatDZDInWords } from '../../utils/formatters';
+import { Teacher, TeacherPayoutLog, Course } from '../../types';
+import { formatDZD, formatDateArabic, formatDZDInWords, formatAlgerianPhone } from '../../utils/formatters';
 import { useToast } from '../../contexts/ToastContext';
 import { useData } from '../../contexts/DataContext';
 import { useSchool } from '../../contexts/SchoolContext';
 
 export const Payroll: React.FC = () => {
-  const { success } = useToast();
+  const { success, warning } = useToast();
   const { currentSchool } = useSchool();
   const {
     teachers,
     courses,
     payoutTeacher,
+    deleteTeacherPayout,
+    resetTeacherPayroll,
     totalTeachersEarned,
     totalTeachersPaid,
     totalTeachersBalanceDue,
@@ -40,21 +45,88 @@ export const Payroll: React.FC = () => {
   const [payoutMethod, setPayoutMethod] = useState('نقداً (Cash)');
   const [payoutNote, setPayoutNote] = useState('');
 
+  // Teacher Payout Voucher State (80mm / A5)
+  const [voucherToPrint, setVoucherToPrint] = useState<{
+    teacher: Teacher;
+    payoutAmount: number;
+    payoutMethod: string;
+    notes?: string;
+    voucherNumber: string;
+    date: string;
+  } | null>(null);
+  const [voucherPaperSize, setVoucherPaperSize] = useState<'80mm' | 'A5'>('80mm');
+
   // Detailed Breakdown Drawer State
   const [activeTeacherId, setActiveTeacherId] = useState<string | null>(null);
   const activeTeacher = teachers.find((t) => t.id === activeTeacherId) || null;
 
-  const handlePayout = (e: React.FormEvent) => {
+  // Delete Payout Confirmation Modal State
+  const [payoutToDelete, setPayoutToDelete] = useState<{ teacherId: string; teacherName: string; log: TeacherPayoutLog } | null>(null);
+
+  // Reset Cycle Confirmation Modal State
+  const [teacherToReset, setTeacherToReset] = useState<Teacher | null>(null);
+
+  const openVoucherModal = (
+    teacher: Teacher,
+    amountToPay?: number,
+    paymentMethod = 'نقداً (Cash)',
+    notes = '',
+    voucherNumber?: string,
+    date?: string
+  ) => {
+    const amt =
+      amountToPay !== undefined
+        ? amountToPay
+        : teacher.totalPaid > 0
+        ? teacher.payoutHistory?.[0]?.amount || teacher.totalPaid
+        : teacher.balanceDue || teacher.totalEarned || 0;
+
+    setVoucherToPrint({
+      teacher,
+      payoutAmount: amt,
+      payoutMethod,
+      notes,
+      voucherNumber:
+        voucherNumber ||
+        `VCH-TCH-${teacher.id.replace(/\D/g, '').slice(-4) || '1'}-${Math.floor(1000 + Math.random() * 9000)}`,
+      date: date || new Date().toISOString().split('T')[0],
+    });
+  };
+
+  const handlePayout = (e: React.FormEvent, andPrint = false) => {
     e.preventDefault();
     if (!selectedTeacherForPayout || !payoutAmount) return;
 
     const payVal = Number(payoutAmount) || 0;
-    payoutTeacher(selectedTeacherForPayout.id, payVal, payoutMethod, payoutNote);
+    const teacher = selectedTeacherForPayout;
+    const method = payoutMethod;
+    const note = payoutNote;
+    const vNumber = `VCH-TCH-${teacher.id.replace(/\D/g, '').slice(-4) || '1'}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    success(`تم تسديد ${formatDZD(payVal)} للأستاذ ${selectedTeacherForPayout.fullName} بنجاح!`, 'تم صرف المستحقات');
+    payoutTeacher(teacher.id, payVal, method, note);
+
+    success(`تم تسديد ${formatDZD(payVal)} للأستاذ ${teacher.fullName} بنجاح!`, 'تم صرف المستحقات');
     setSelectedTeacherForPayout(null);
     setPayoutAmount('');
     setPayoutNote('');
+
+    if (andPrint) {
+      openVoucherModal(teacher, payVal, method, note, vNumber);
+    }
+  };
+
+  const confirmDeletePayout = () => {
+    if (!payoutToDelete) return;
+    deleteTeacherPayout(payoutToDelete.teacherId, payoutToDelete.log.id);
+    success(`تم حذف سجل الدفعة بقيمة ${formatDZD(payoutToDelete.log.amount)} بنجاح.`);
+    setPayoutToDelete(null);
+  };
+
+  const confirmResetPayroll = () => {
+    if (!teacherToReset) return;
+    resetTeacherPayroll(teacherToReset.id);
+    success(`تمت تصفية سجلات أجور ومستحقات الأستاذ "${teacherToReset.fullName}" وبدء دورة جديدة بنجاح!`, 'تصفية الحساب');
+    setTeacherToReset(null);
   };
 
   // Get courses assigned to a teacher
@@ -75,16 +147,790 @@ export const Payroll: React.FC = () => {
     );
   };
 
-  // Calculate teacher share for a specific course
-  const calculateCourseTeacherShare = (teacher: Teacher, coursePrice: number, enrolledCount: number) => {
+  // Calculate teacher share for a specific course based on student attendance & absences
+  const calculateCourseTeacherShare = (teacher: Teacher, course: Course) => {
     const type = teacher.compensationType || 'percentage_per_student';
+    const commission = teacher.commissionPercentage !== undefined ? teacher.commissionPercentage : 60;
+    const fixedRate = teacher.fixedCourseRate !== undefined ? teacher.fixedCourseRate : 25000;
+    const defaultQuota = course.totalSessionsDefault || 5;
+    const price = course.monthlyPrice || 0;
+    const list = course.enrolledList || [];
+
     if (type === 'percentage_per_student') {
-      return enrolledCount * coursePrice * ((teacher.commissionPercentage || 60) / 100);
+      let earned = 0;
+      list.forEach((std) => {
+        const quota = std.totalSessions || defaultQuota || 5;
+        const perSession = price / (quota > 0 ? quota : 5);
+        const logs = std.attendanceLogs || [];
+        const counted = logs.length > 0
+          ? logs.filter((l) => l.status === 'present' || l.status === 'absent_counted').length
+          : (std.attendedSessions || 0);
+        earned += counted * perSession * (commission / 100);
+      });
+      return Math.round(earned);
     } else if (type === 'percentage_per_course') {
-      return coursePrice * ((teacher.commissionPercentage || 60) / 100);
+      const perSession = (price / (defaultQuota > 0 ? defaultQuota : 5)) * (commission / 100);
+      const courseSessionsHeld = list.reduce((maxSess, std) => {
+        const logs = std.attendanceLogs || [];
+        const count = logs.length > 0
+          ? logs.filter((l) => l.status === 'present' || l.status === 'absent_counted').length
+          : (std.attendedSessions || 0);
+        return Math.max(maxSess, count);
+      }, 0);
+      return Math.round(courseSessionsHeld * perSession);
     } else {
-      return teacher.fixedCourseRate || 25000;
+      const perSession = fixedRate / (defaultQuota > 0 ? defaultQuota : 5);
+      const courseSessionsHeld = list.reduce((maxSess, std) => {
+        const logs = std.attendanceLogs || [];
+        const count = logs.length > 0
+          ? logs.filter((l) => l.status === 'present' || l.status === 'absent_counted').length
+          : (std.attendedSessions || 0);
+        return Math.max(maxSess, count);
+      }, 0);
+      return Math.round(courseSessionsHeld * perSession);
     }
+  };
+
+  const handlePrintTeacherStatement = (teacher: Teacher) => {
+    const schoolName = currentSchool?.name || 'مدرستي التعليمية';
+    const now = new Date();
+    const formattedDate = `${formatDateArabic(now.toISOString().split('T')[0])} - ${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+
+    const teacherCourses = getTeacherCourses(teacher.id);
+    const compensationType = teacher.compensationType || 'percentage_per_student';
+    const commission = teacher.commissionPercentage !== undefined ? teacher.commissionPercentage : 60;
+    const fixedRate = teacher.fixedCourseRate !== undefined ? teacher.fixedCourseRate : 25000;
+
+    let compText = `نسبة ${commission}% من اشتراك كل تلميذ`;
+    if (compensationType === 'percentage_per_course') compText = `نسبة ${commission}% من سعر الفوج الإجمالي`;
+    if (compensationType === 'fixed_per_course') compText = `مبلغ مقطوع: ${fixedRate.toLocaleString('fr-DZ')} دج لكل فوج`;
+
+    // Flatten all students across all courses of this teacher
+    const studentRows: string[] = [];
+    let totalAllEnrolled = 0;
+    let totalAllPresent = 0;
+    let totalAllAbsentCounted = 0;
+    let totalAllAbsentUncounted = 0;
+    let totalAllCalculatedForTeacher = 0;
+    let totalAllSubscribedQuota = 0;
+    let totalAllTeacherShare = 0;
+
+    teacherCourses.forEach((c) => {
+      const list = c.enrolledList || [];
+      totalAllEnrolled += list.length;
+
+      list.forEach((std) => {
+        const logs = std.attendanceLogs || [];
+        const presentLogs = logs.filter((l) => l.status === 'present');
+        const absentCountedLogs = logs.filter((l) => l.status === 'absent_counted');
+        const absentUncountedLogs = logs.filter((l) => l.status === 'absent_uncounted');
+
+        const presentCount = presentLogs.length > 0 || absentCountedLogs.length > 0 ? presentLogs.length : (std.attendedSessions || 0);
+        const absentCounted = absentCountedLogs.length;
+        const absentUncounted = absentUncountedLogs.length;
+        const totalCalculatedForTeacher = presentCount + absentCounted;
+
+        totalAllPresent += presentCount;
+        totalAllAbsentCounted += absentCounted;
+        totalAllAbsentUncounted += absentUncounted;
+        totalAllCalculatedForTeacher += totalCalculatedForTeacher;
+
+        // Base package quota per cycle (e.g. 4)
+        const basePackage = std.totalSessions && std.totalSessions > 0
+          ? std.totalSessions
+          : c.totalSessionsDefault && c.totalSessionsDefault > 0
+          ? c.totalSessionsDefault
+          : 4;
+
+        // Calculate total subscription quota across all cycles / renewals
+        const renewalLogs = logs.filter((l) => l.status === 'renewed' || l.type === 'renewed');
+        const cyclesFromAttendance = Math.ceil(totalCalculatedForTeacher / (basePackage > 0 ? basePackage : 4));
+        const cyclesFromRenewals = 1 + renewalLogs.length;
+        const cyclesFromPayments = c.monthlyPrice && c.monthlyPrice > 0 && std.totalPaid > 0
+          ? Math.round(std.totalPaid / c.monthlyPrice)
+          : 1;
+
+        const totalCycles = Math.max(1, cyclesFromAttendance, cyclesFromRenewals, cyclesFromPayments);
+        const totalSubscribedSessions = totalCycles * basePackage;
+
+        totalAllSubscribedQuota += totalSubscribedSessions;
+
+        // Formulate absence history details string
+        const absenceDetails: string[] = [];
+        absentCountedLogs.forEach((l) => {
+          absenceDetails.push(`${l.date} (حصة ${l.sessionNumber}): محسوبة`);
+        });
+        absentUncountedLogs.forEach((l) => {
+          absenceDetails.push(`${l.date}: معفى ${l.notes ? `(${l.notes})` : ''}`);
+        });
+
+        // Student's monetary contribution to teacher based on actual counted attendance & absences
+        let teacherShareFromStudent = 0;
+        if (compensationType === 'percentage_per_student') {
+          const perSessionPrice = (c.monthlyPrice || 0) / (basePackage > 0 ? basePackage : 4);
+          teacherShareFromStudent = totalCalculatedForTeacher * perSessionPrice * (commission / 100);
+          totalAllTeacherShare += teacherShareFromStudent;
+        }
+
+        studentRows.push(`
+          <tr>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center;">${studentRows.length + 1}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; font-weight: bold;">${std.fullName}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db;">${c.title}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center; font-weight: bold; color: #1e3a8a;">
+              ${totalSubscribedSessions}
+            </td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center; color: #16a34a; font-weight: bold;">${presentCount}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center; color: #dc2626; font-weight: bold;">${absentCounted}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center; color: #ea580c;">${absentUncounted}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center; font-weight: bold; background-color: #f8fafc;">${totalCalculatedForTeacher}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: left; font-weight: bold;">${teacherShareFromStudent > 0 ? `${teacherShareFromStudent.toLocaleString('fr-DZ')} دج` : 'حسب الفوج'}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; font-size: 10px; color: #4b5563;">
+              ${absenceDetails.length > 0 ? absenceDetails.join('<br/>') : '<span style="color: #16a34a;">لا توجد غيابات مسجلة (حضور كامل)</span>'}
+            </td>
+          </tr>
+        `);
+      });
+    });
+
+    const printWindow = window.open('', '_blank', 'width=980,height=800');
+    if (!printWindow) {
+      alert('يرجى السماح بالنوافذ المنبثقة (Popups) للتمكن من طباعة الوصل.');
+      return;
+    }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ar">
+      <head>
+        <meta charset="utf-8">
+        <title>وصل مستحقات الأستاذ - ${teacher.fullName}</title>
+        <style>
+          @page {
+            size: A4 landscape;
+            margin: 12mm;
+          }
+          body {
+            font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+            margin: 0;
+            padding: 10px;
+            color: #111827;
+            background: #fff;
+            direction: rtl;
+            font-size: 11px;
+            line-height: 1.4;
+          }
+          .header-box {
+            border-bottom: 2px solid #1e3a8a;
+            padding-bottom: 10px;
+            margin-bottom: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          .title {
+            font-size: 18px;
+            font-weight: 800;
+            color: #1e3a8a;
+          }
+          .sub-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #4b5563;
+          }
+          .info-cards {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 14px;
+          }
+          .card {
+            border: 1px solid #e5e7eb;
+            background-color: #f9fafb;
+            padding: 10px;
+            border-radius: 6px;
+          }
+          .card-title {
+            font-size: 10px;
+            color: #6b7280;
+            margin-bottom: 3px;
+          }
+          .card-val {
+            font-size: 14px;
+            font-weight: 800;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 14px;
+            font-size: 10.5px;
+          }
+          th {
+            background-color: #f3f4f6;
+            color: #1f2937;
+            padding: 7px 6px;
+            border: 1px solid #d1d5db;
+            text-align: right;
+            font-weight: 700;
+          }
+          .legend-box {
+            display: flex;
+            gap: 16px;
+            padding: 8px 12px;
+            background-color: #f3f4f6;
+            border-radius: 6px;
+            font-size: 10px;
+            margin-bottom: 12px;
+          }
+          .signatures {
+            margin-top: 24px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            page-break-inside: avoid;
+          }
+          .sig-box {
+            border-top: 1px dashed #9ca3af;
+            padding-top: 8px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 11px;
+          }
+          @media print {
+            body { padding: 0; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header-box">
+          <div>
+            <div class="title">${schoolName}</div>
+            <div class="sub-title">وصل تسوية مستحقات الأستاذ وكشف حضور وغيابات التلاميذ للدورة الحالية</div>
+            <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">
+              الأستاذ: <strong>${teacher.fullName}</strong> | المادة: <strong>${teacher.subject}</strong> | نظام الأتعاب: <strong>${compText}</strong>
+            </div>
+          </div>
+          <div style="text-align: left; font-size: 10px; color: #4b5563;">
+            <div>تاريخ الاستخراج: <strong>${formattedDate}</strong></div>
+            <div>رقم السند: <strong>PAY-TCH-${teacher.id.replace('t-', '')}-${now.getFullYear()}</strong></div>
+          </div>
+        </div>
+
+        <div class="info-cards">
+          <div class="card">
+            <div class="card-title">إجمالي التلاميذ المسجلين</div>
+            <div class="card-val" style="color: #1e3a8a;">${totalAllEnrolled} تلميذ في ${teacherCourses.length} أفواج</div>
+          </div>
+          <div class="card">
+            <div class="card-title">مستحقات الأستاذ المحسوبة للدورة</div>
+            <div class="card-val" style="color: #16a34a;">${(teacher.totalEarned || 0).toLocaleString('fr-DZ')} دج</div>
+          </div>
+          <div class="card">
+            <div class="card-title">المبالغ المسددة في هذه الدورة</div>
+            <div class="card-val" style="color: #2563eb;">${(teacher.totalPaid || 0).toLocaleString('fr-DZ')} دج</div>
+          </div>
+          <div class="card" style="border: 2px solid ${(teacher.balanceDue || 0) > 0 ? '#f59e0b' : '#10b981'};">
+            <div class="card-title">الرصيد الصافي المتبقي</div>
+            <div class="card-val" style="color: ${(teacher.balanceDue || 0) > 0 ? '#d97706' : '#16a34a'};">
+              ${(teacher.balanceDue || 0) > 0 ? `${(teacher.balanceDue || 0).toLocaleString('fr-DZ')} دج` : 'مسدد بالكامل'}
+            </div>
+          </div>
+        </div>
+
+        <div class="legend-box">
+          <span>دليل كشف الحساب:</span>
+          <span><strong>إجمالي حصص الاشتراكات</strong>: ${totalAllSubscribedQuota} حصة</span>
+          <span><strong style="color: #16a34a;">● حضور</strong>: ${totalAllPresent} حصة</span>
+          <span><strong style="color: #dc2626;">● غياب محسوب</strong>: ${totalAllAbsentCounted} حصة</span>
+          <span><strong style="color: #ea580c;">● غياب معفى</strong>: ${totalAllAbsentUncounted} حصة</span>
+          <span><strong>المجموع المحسوب للأستاذ</strong>: ${totalAllCalculatedForTeacher} حصة</span>
+        </div>
+
+        <div style="font-weight: 700; margin-bottom: 6px; font-size: 11px; color: #1e3a8a;">
+          كشف حضور وغياب التلاميذ المفصل في أفواج الأستاذ:
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 25px; text-align: center;">#</th>
+              <th>اسم التلميذ</th>
+              <th>الفوج</th>
+              <th style="width: 60px; text-align: center;">حصص الاشتراك</th>
+              <th style="width: 45px; text-align: center; color: #16a34a;">حضور</th>
+              <th style="width: 55px; text-align: center; color: #dc2626;">غياب محسوب</th>
+              <th style="width: 55px; text-align: center; color: #ea580c;">غياب معفى</th>
+              <th style="width: 65px; text-align: center;">المحسوب للأستاذ</th>
+              <th style="text-align: left;">مستحق الأستاذ</th>
+              <th>تفاصيل وتواريخ الغياب المسجلة</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${studentRows.length > 0 ? studentRows.join('') : '<tr><td colspan="10" style="text-align: center; padding: 12px; color: #9ca3af;">لا يوجد تلاميذ مسجلين في أفواج هذا الأستاذ حتى الآن</td></tr>'}
+          </tbody>
+          ${studentRows.length > 0 ? `
+          <tfoot>
+            <tr style="background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #94a3b8;">
+              <td colspan="3" style="padding: 8px; text-align: center; font-weight: 800; color: #1e3a8a;">
+                المجموع الإجمالي العام (${studentRows.length} تلميذ)
+              </td>
+              <td style="padding: 8px; text-align: center; font-weight: 800; color: #1e3a8a; font-size: 12px;">${totalAllSubscribedQuota}</td>
+              <td style="padding: 8px; text-align: center; font-weight: 800; color: #16a34a; font-size: 12px;">${totalAllPresent}</td>
+              <td style="padding: 8px; text-align: center; font-weight: 800; color: #dc2626; font-size: 12px;">${totalAllAbsentCounted}</td>
+              <td style="padding: 8px; text-align: center; font-weight: 800; color: #ea580c; font-size: 12px;">${totalAllAbsentUncounted}</td>
+              <td style="padding: 8px; text-align: center; font-weight: 800; font-size: 12px; background-color: #e2e8f0;">${totalAllCalculatedForTeacher}</td>
+              <td style="padding: 8px; text-align: left; font-weight: 800; color: #15803d; font-size: 11px;">
+                ${totalAllTeacherShare > 0 ? `${totalAllTeacherShare.toLocaleString('fr-DZ')} دج` : `${(teacher.totalEarned || 0).toLocaleString('fr-DZ')} دج`}
+              </td>
+              <td style="padding: 8px; font-size: 10px; color: #64748b;">
+                إجمالي الحصص المدروسة: ${totalAllPresent + totalAllAbsentCounted + totalAllAbsentUncounted} حصة
+              </td>
+            </tr>
+          </tfoot>
+          ` : ''}
+        </table>
+
+        <div class="signatures">
+          <div class="sig-box">
+            توقيع وختم إدارة المدرسة
+            <div style="height: 40px;"></div>
+          </div>
+          <div class="sig-box">
+            توقيع واستلام الأستاذ: <strong>${teacher.fullName}</strong>
+            <div style="font-size: 9.5px; color: #6b7280; margin-top: 2px;">
+              أقر باستلامي المستحقات وموافقتي على كشف الحضور والغيابات المذكور أعلاه
+            </div>
+            <div style="height: 30px;"></div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = function() {
+            window.print();
+          };
+        </script>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  const handlePrintTeacherVoucher = (
+    voucherData: {
+      teacher: Teacher;
+      payoutAmount: number;
+      payoutMethod: string;
+      notes?: string;
+      voucherNumber: string;
+      date: string;
+    },
+    paperSize: '80mm' | 'A5' = '80mm'
+  ) => {
+    const { teacher, payoutAmount, payoutMethod, notes, voucherNumber, date } = voucherData;
+    const schoolName = currentSchool?.name || 'مدرستي التعليمية';
+    const schoolPhone = currentSchool?.phone || '';
+    const schoolAddress = currentSchool?.address || '';
+    const now = new Date();
+    const formattedDate = `${formatDateArabic(date || now.toISOString().split('T')[0])} - ${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+
+    const teacherCourses = getTeacherCourses(teacher.id);
+    const compensationType = teacher.compensationType || 'percentage_per_student';
+    const commission = teacher.commissionPercentage !== undefined ? teacher.commissionPercentage : 60;
+    const schoolSharePercent = 100 - commission;
+    const fixedRate = teacher.fixedCourseRate !== undefined ? teacher.fixedCourseRate : 25000;
+
+    let compBadgeText = `نسبة الأستاذ: ${commission}% | نسبة المؤسسة: ${schoolSharePercent}%`;
+    if (compensationType === 'percentage_per_course') {
+      compBadgeText = `نسبة من الفوج: ${commission}% أستاذ | ${schoolSharePercent}% مؤسسة`;
+    } else if (compensationType === 'fixed_per_course') {
+      compBadgeText = `مبلغ مقطوع: ${fixedRate.toLocaleString('fr-DZ')} دج لكل فوج`;
+    }
+
+    let totalCalculatedEarned = 0;
+    const courseRowsData = teacherCourses.map((c) => {
+      const list = c.enrolledList || [];
+      const enrolledCount = list.length;
+      const sessionsHeld = list.reduce((maxSess, std) => {
+        const logs = std.attendanceLogs || [];
+        const count = logs.length > 0
+          ? logs.filter((l) => l.status === 'present' || l.status === 'absent_counted').length
+          : (std.attendedSessions || 0);
+        return Math.max(maxSess, count);
+      }, 0);
+
+      const teacherShare = calculateCourseTeacherShare(teacher, c);
+      totalCalculatedEarned += teacherShare;
+      const gross = enrolledCount * (c.monthlyPrice || 0);
+
+      return {
+        title: c.title,
+        academicLevel: c.academicLevel || 'عام',
+        enrolledCount,
+        sessionsHeld,
+        totalSessionsDefault: c.totalSessionsDefault || 5,
+        monthlyPrice: c.monthlyPrice || 0,
+        gross,
+        teacherShare,
+      };
+    });
+
+    const wordsAmount = formatDZDInWords(payoutAmount);
+
+    const printWindow = window.open('', '_blank', 'width=850,height=950');
+    if (!printWindow) return;
+
+    if (paperSize === '80mm') {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+          <meta charset="UTF-8">
+          <title>سند صرف أتعاب - ${teacher.fullName}</title>
+          <style>
+            @page {
+              size: 80mm auto;
+              margin: 2mm 3mm;
+            }
+            body {
+              font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+              direction: rtl;
+              width: 72mm;
+              margin: 0 auto;
+              padding: 2mm 0;
+              color: #000;
+              font-size: 11px;
+              line-height: 1.35;
+            }
+            .center { text-align: center; }
+            .header-title { font-size: 14px; font-weight: 800; margin: 2px 0; }
+            .sub-title { font-size: 11px; font-weight: 700; background: #000; color: #fff; padding: 2px 5px; display: inline-block; border-radius: 3px; margin: 4px 0; }
+            .dashed { border-top: 1px dashed #000; margin: 6px 0; }
+            .solid { border-top: 1px solid #000; margin: 6px 0; }
+            .row { display: flex; justify-content: space-between; margin: 2px 0; font-size: 10.5px; }
+            table { width: 100%; border-collapse: collapse; margin: 5px 0; font-size: 10px; }
+            th, td { padding: 3px 2px; text-align: right; border-bottom: 1px dotted #888; }
+            th { border-bottom: 1px solid #000; font-weight: 700; }
+            .amount-box { border: 1.5px solid #000; padding: 6px; text-align: center; margin: 6px 0; border-radius: 4px; }
+            .amount-val { font-size: 16px; font-weight: 900; }
+            .amount-words { font-size: 9.5px; font-weight: 700; margin-top: 3px; }
+            .sig-area { margin-top: 10px; font-size: 9.5px; }
+            .sig-title { font-weight: 700; margin-bottom: 25px; }
+            .footer-msg { font-size: 8.5px; text-align: center; color: #444; margin-top: 8px; }
+          </style>
+        </head>
+        <body>
+          <div class="center">
+            <div class="header-title">${schoolName}</div>
+            ${schoolPhone ? `<div style="font-size: 9.5px;">هاتف: ${schoolPhone}</div>` : ''}
+            <div class="sub-title">سند صرف وتصفية أتعاب أستاذ</div>
+          </div>
+
+          <div class="dashed"></div>
+
+          <div class="row"><span>رقم السند:</span><strong>${voucherNumber}</strong></div>
+          <div class="row"><span>التاريخ:</span><span>${formattedDate}</span></div>
+          <div class="row"><span>طريقة الدفع:</span><strong>${payoutMethod}</strong></div>
+
+          <div class="dashed"></div>
+
+          <div class="row"><span>الأستاذ:</span><strong>${teacher.fullName}</strong></div>
+          <div class="row"><span>المادة:</span><span>${teacher.subject} • ${teacher.specialization}</span></div>
+          ${teacher.phone ? `<div class="row"><span>الهاتف:</span><span>${formatAlgerianPhone(teacher.phone)}</span></div>` : ''}
+          <div class="row"><span>طريقة الأتعاب:</span><span>${compBadgeText}</span></div>
+
+          <div class="dashed"></div>
+
+          <div style="font-weight: 700; margin-bottom: 3px; font-size: 10.5px;">الأفواج والحصص المؤطرة:</div>
+          <table>
+            <thead>
+              <tr>
+                <th>الفوج</th>
+                <th style="text-align: center;">الحصص</th>
+                <th style="text-align: center;">تلاميذ</th>
+                <th style="text-align: left;">المستحق</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${courseRowsData.map(c => `
+                <tr>
+                  <td>${c.title}</td>
+                  <td style="text-align: center;">${c.sessionsHeld}/${c.totalSessionsDefault}</td>
+                  <td style="text-align: center;">${c.enrolledCount}</td>
+                  <td style="text-align: left;">${c.teacherShare.toLocaleString('fr-DZ')}</td>
+                </tr>
+              `).join('')}
+              ${courseRowsData.length === 0 ? '<tr><td colspan="4" style="text-align:center; color:#666;">لا توجد أفواج مسندة</td></tr>' : ''}
+            </tbody>
+          </table>
+
+          <div class="solid"></div>
+
+          <div class="row"><span>إجمالي المستحق المحسوب:</span><strong>${(teacher.totalEarned || totalCalculatedEarned).toLocaleString('fr-DZ')} دج</strong></div>
+          <div class="row"><span>المسدد سابقاً:</span><span>${(teacher.totalPaid || 0).toLocaleString('fr-DZ')} دج</span></div>
+          <div class="row"><span>المتبقي في الذمة:</span><strong>${(teacher.balanceDue || 0).toLocaleString('fr-DZ')} دج</strong></div>
+
+          <div class="amount-box">
+            <div style="font-size: 10px; font-weight: 700;">المبلغ المصروف والمسدد الآن</div>
+            <div class="amount-val">${payoutAmount.toLocaleString('fr-DZ')} دج</div>
+            <div class="amount-words">فقط ${wordsAmount}</div>
+          </div>
+
+          ${notes ? `<div style="font-size: 9.5px; margin: 4px 0;"><strong>ملاحظات:</strong> ${notes}</div>` : ''}
+
+          <div class="sig-area">
+            <div style="display: flex; justify-content: space-between; gap: 8px;">
+              <div style="width: 48%; text-align: center; border: 1px dashed #888; padding: 4px; border-radius: 3px;">
+                <div class="sig-title">توقيع واستلام الأستاذ</div>
+              </div>
+              <div style="width: 48%; text-align: center; border: 1px dashed #888; padding: 4px; border-radius: 3px;">
+                <div class="sig-title">ختم وتوقيع الإدارة</div>
+              </div>
+            </div>
+            <div style="font-size: 8px; color: #555; text-align: center; margin-top: 4px;">
+              إقرار: أقر باستلامي المبلغ المذكور أعلاه كاملاً وموافقتي على تصفية الحساب.
+            </div>
+          </div>
+
+          <div class="dashed"></div>
+          <div class="footer-msg">School EPR • نظام الإدارة المدرسية المتكامل</div>
+
+          <script>
+            window.onload = function() {
+              window.print();
+            };
+          </script>
+        </body>
+        </html>
+      `);
+    } else {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+          <meta charset="UTF-8">
+          <title>سند صرف أتعاب - ${teacher.fullName} (A5)</title>
+          <style>
+            @page {
+              size: A5 portrait;
+              margin: 8mm 10mm;
+            }
+            body {
+              font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+              direction: rtl;
+              margin: 0;
+              padding: 0;
+              color: #1f2937;
+              font-size: 11.5px;
+              line-height: 1.4;
+            }
+            .voucher-container {
+              border: 1.5px solid #2563eb;
+              border-radius: 8px;
+              padding: 14px 16px;
+            }
+            .header-bar {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              border-bottom: 2px solid #2563eb;
+              padding-bottom: 8px;
+              margin-bottom: 10px;
+            }
+            .school-name { font-size: 16px; font-weight: 800; color: #1e3a8a; }
+            .voucher-badge {
+              background: #2563eb;
+              color: #fff;
+              padding: 4px 12px;
+              border-radius: 6px;
+              font-size: 13px;
+              font-weight: 700;
+              text-align: center;
+            }
+            .info-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 8px;
+              background: #f8fafc;
+              border: 1px solid #e2e8f0;
+              border-radius: 6px;
+              padding: 8px 12px;
+              margin-bottom: 10px;
+              font-size: 11px;
+            }
+            .info-item { display: flex; justify-content: space-between; }
+            .info-label { color: #64748b; font-weight: 600; }
+            .info-value { font-weight: 700; color: #0f172a; }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 10px;
+              font-size: 11px;
+            }
+            th, td {
+              border: 1px solid #cbd5e1;
+              padding: 5px 8px;
+              text-align: right;
+            }
+            th {
+              background: #f1f5f9;
+              font-weight: 700;
+              color: #1e293b;
+            }
+            .payout-box {
+              background: #eff6ff;
+              border: 1.5px solid #3b82f6;
+              border-radius: 6px;
+              padding: 10px;
+              margin-bottom: 10px;
+            }
+            .payout-main {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            }
+            .payout-amount {
+              font-size: 18px;
+              font-weight: 900;
+              color: #1d4ed8;
+            }
+            .words-banner {
+              margin-top: 5px;
+              font-weight: 700;
+              color: #1e40af;
+              font-size: 11px;
+              background: #dbeafe;
+              padding: 4px 8px;
+              border-radius: 4px;
+            }
+            .signatures-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 14px;
+              margin-top: 12px;
+            }
+            .sig-box {
+              border: 1px dashed #94a3b8;
+              border-radius: 6px;
+              padding: 8px 10px;
+              min-height: 70px;
+              display: flex;
+              flex-direction: column;
+              justify-content: space-between;
+            }
+            .sig-title { font-weight: 700; font-size: 11px; color: #334155; }
+            .legal-disclaimer {
+              font-size: 9px;
+              color: #64748b;
+              margin-top: 8px;
+              text-align: center;
+              border-top: 1px dotted #cbd5e1;
+              padding-top: 4px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="voucher-container">
+            <div class="header-bar">
+              <div>
+                <div class="school-name">${schoolName}</div>
+                <div style="font-size: 10px; color: #64748b; margin-top: 2px;">
+                  ${schoolAddress ? `${schoolAddress} • ` : ''}${schoolPhone ? `هاتف: ${schoolPhone}` : ''}
+                </div>
+              </div>
+              <div>
+                <div class="voucher-badge">سند صرف وتصفية أتعاب أستاذ</div>
+                <div style="text-align: center; font-size: 9px; color: #64748b; margin-top: 2px;">Teacher Payout Voucher (A5)</div>
+              </div>
+              <div style="text-align: left; font-size: 10px;">
+                <div>رقم السند: <strong>${voucherNumber}</strong></div>
+                <div>التاريخ: <strong>${date}</strong></div>
+              </div>
+            </div>
+
+            <div class="info-grid">
+              <div class="info-item"><span class="info-label">اسم الأستاذ:</span><span class="info-value">${teacher.fullName}</span></div>
+              <div class="info-item"><span class="info-label">المادة والتخصص:</span><span class="info-value">${teacher.subject} • ${teacher.specialization}</span></div>
+              <div class="info-item"><span class="info-label">الهاتف:</span><span class="info-value">${formatAlgerianPhone(teacher.phone)}</span></div>
+              <div class="info-item"><span class="info-label">طريقة الأتعاب:</span><span class="info-value" style="color: #2563eb;">${compBadgeText}</span></div>
+            </div>
+
+            <table style="margin-bottom: 8px;">
+              <thead>
+                <tr>
+                  <th>الفوج / الدورة</th>
+                  <th>الطور / المستوى</th>
+                  <th style="text-align: center;">التلاميذ</th>
+                  <th style="text-align: center;">الحصص المنفذة</th>
+                  <th style="text-align: left;">مداخيل الفوج</th>
+                  <th style="text-align: left;">مستحق الأستاذ</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${courseRowsData.map(c => `
+                  <tr>
+                    <td><strong>${c.title}</strong></td>
+                    <td>${c.academicLevel}</td>
+                    <td style="text-align: center;">${c.enrolledCount}</td>
+                    <td style="text-align: center;">${c.sessionsHeld} من ${c.totalSessionsDefault} حصص</td>
+                    <td style="text-align: left;">${c.gross.toLocaleString('fr-DZ')} دج</td>
+                    <td style="text-align: left; font-weight: 700; color: #2563eb;">${c.teacherShare.toLocaleString('fr-DZ')} دج</td>
+                  </tr>
+                `).join('')}
+                ${courseRowsData.length === 0 ? '<tr><td colspan="6" style="text-align: center; color: #94a3b8;">لا توجد دورات مسندة لهذا الأستاذ حالياً</td></tr>' : ''}
+              </tbody>
+            </table>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; font-size: 11px;">
+              <div style="background: #f1f5f9; padding: 6px 8px; border-radius: 4px;">
+                <span style="color: #64748b;">إجمالي المستحق:</span> <strong>${(teacher.totalEarned || totalCalculatedEarned).toLocaleString('fr-DZ')} دج</strong>
+              </div>
+              <div style="background: #f1f5f9; padding: 6px 8px; border-radius: 4px;">
+                <span style="color: #64748b;">المسدد سابقاً:</span> <strong style="color: #16a34a;">${(teacher.totalPaid || 0).toLocaleString('fr-DZ')} دج</strong>
+              </div>
+              <div style="background: #f1f5f9; padding: 6px 8px; border-radius: 4px;">
+                <span style="color: #64748b;">المتبقي في الذمة:</span> <strong style="color: #ea580c;">${(teacher.balanceDue || 0).toLocaleString('fr-DZ')} دج</strong>
+              </div>
+            </div>
+
+            <div class="payout-box">
+              <div class="payout-main">
+                <div>
+                  <span style="font-size: 11px; color: #1e40af; font-weight: 700;">المبلغ المصروف بموجب هذا السند:</span>
+                  <div style="font-size: 10px; color: #64748b; margin-top: 1px;">طريقة الدفع: <strong>${payoutMethod}</strong> ${notes ? `• ${notes}` : ''}</div>
+                </div>
+                <div class="payout-amount">${payoutAmount.toLocaleString('fr-DZ')} دج</div>
+              </div>
+              <div class="words-banner">المبلغ بالحروف: فقط ${wordsAmount} لا غير.</div>
+            </div>
+
+            <div class="signatures-grid">
+              <div class="sig-box">
+                <div class="sig-title">توقيع واستلام الأستاذ: <strong>${teacher.fullName}</strong></div>
+                <div style="font-size: 9px; color: #64748b;">أقر باستلامي المستحقات المبينة أعلاه كاملة دون أي تحفظ وموافقتي على تصفية الحساب.</div>
+                <div style="height: 35px;"></div>
+              </div>
+              <div class="sig-box">
+                <div class="sig-title">اعتماد وختم إدارة المؤسسة التعليمية:</div>
+                <div style="font-size: 9px; color: #64748b;">سند رسمي لحفظ الحقوق المالية والمحاسبية.</div>
+                <div style="height: 35px;"></div>
+              </div>
+            </div>
+
+            <div class="legal-disclaimer">
+              تم إصدار هذا السند إلكترونياً عبر منظومة إدارة المدارس والمراكز التعليمية School EPR • ${formattedDate}
+            </div>
+          </div>
+
+          <script>
+            window.onload = function() {
+              window.print();
+            };
+          </script>
+        </body>
+        </html>
+      `);
+    }
+
+    printWindow.document.close();
   };
 
   const totalGrossRevenueAll = teachers.reduce((acc, t) => acc + getTeacherGrossRevenue(t.id), 0);
@@ -147,7 +993,7 @@ export const Payroll: React.FC = () => {
     },
     {
       key: 'totalEarned',
-      header: 'إجمالي المستحق المحسوب',
+      header: 'مستحق الدورة الحالية',
       sortable: true,
       render: (t) => (
         <div>
@@ -155,14 +1001,20 @@ export const Payroll: React.FC = () => {
             {formatDZD(t.totalEarned || 0)}
           </div>
           <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
-            من إجمالي مدخول {formatDZD(getTeacherGrossRevenue(t.id))}
+            {(t.totalEarned || 0) > 0 ? (
+              <span style={{ color: 'var(--color-success)', fontWeight: 600 }}>
+                محسوب من الحضور والغياب (حضور / غياب محسوب)
+              </span>
+            ) : (
+              <span>دورة جديدة • في انتظار الحصص</span>
+            )}
           </div>
         </div>
       ),
     },
     {
       key: 'totalPaid',
-      header: 'المبالغ المسددة له',
+      header: 'المسدد في الدورة الحالية',
       sortable: true,
       render: (t) => (
         <span style={{ color: 'var(--color-success)', fontWeight: 600 }}>
@@ -180,25 +1032,47 @@ export const Payroll: React.FC = () => {
             <span style={{ color: 'var(--color-warning)', fontWeight: 700, fontSize: '0.9375rem' }}>
               {formatDZD(t.balanceDue)}
             </span>
+          ) : (t.totalEarned || 0) === 0 ? (
+            <Badge variant="info">دورة جديدة (0 دج)</Badge>
           ) : (
-            <Badge variant="success">مسدد بالكامل ✓</Badge>
+            <Badge variant="success">مسدد بالكامل</Badge>
           )}
         </div>
       ),
     },
     {
       key: 'actions',
-      header: 'الإجراءات وكشف الحساب',
-      width: '220px',
+      header: 'الإجراءات وسند الصرف',
+      width: '340px',
       render: (t) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => openVoucherModal(t)}
+            title="طباعة سند صرف وتصفية أتعاب الأستاذ (حرارية 80mm أو A5)"
+            rightIcon={<Printer size={13} />}
+          >
+            سند أتعاب
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => handlePrintTeacherStatement(t)}
+            title="كشف تفصيلي لحضور وغياب تلاميذ الأفواج"
+            style={{ color: 'var(--color-text-secondary)' }}
+            rightIcon={<FileText size={13} />}
+          >
+            كشف حضور
+          </Button>
+
           <Button
             variant="secondary"
             size="sm"
             onClick={() => setActiveTeacherId(t.id)}
-            rightIcon={<FileText size={13} />}
           >
-            كشف الأفواج
+            الحساب
           </Button>
 
           <Button
@@ -212,6 +1086,18 @@ export const Payroll: React.FC = () => {
           >
             تسديد
           </Button>
+
+          {((t.totalPaid || 0) > 0 || (t.payoutHistory && t.payoutHistory.length > 0)) && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setTeacherToReset(t)}
+              title="تصفير المستحقات وبدء دورة جديدة"
+              style={{ color: 'var(--color-text-secondary)', padding: '6px' }}
+            >
+              <RotateCcw size={14} />
+            </Button>
+          )}
         </div>
       ),
     },
@@ -227,7 +1113,7 @@ export const Payroll: React.FC = () => {
       {/* KPI Stats */}
       <div className="grid grid-cols-4 lg:grid-cols-2 md:grid-cols-1 gap-4" style={{ marginBottom: 'var(--space-6)' }}>
         <StatCard
-          title="إجمالي مستحقات الأساتذة"
+          title="مستحقات الدورة الحالية"
           value={formatDZD(totalTeachersEarned)}
           subtitle="محسوبة بالخيارات المحددة"
           icon={<Wallet size={20} color="var(--color-primary)" />}
@@ -239,7 +1125,7 @@ export const Payroll: React.FC = () => {
           icon={<Coins size={20} color="var(--color-success)" />}
         />
         <StatCard
-          title="المبالغ المسددة للأساتذة"
+          title="المسدد للأساتذة (الدورة الحالية)"
           value={formatDZD(totalTeachersPaid)}
           subtitle="مدفوعات مستلمة"
           icon={<CheckCircle size={20} color="var(--color-info)" />}
@@ -317,10 +1203,18 @@ export const Payroll: React.FC = () => {
             />
 
             <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '8px', marginTop: 'var(--space-2)' }}>
-              <Button type="submit" variant="primary">
-                تأكيد الصرف والتسديد
+              <Button
+                type="button"
+                variant="primary"
+                onClick={(e) => handlePayout(e, true)}
+                rightIcon={<Printer size={15} />}
+              >
+                تسديد وطباعة سند الصرف
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setSelectedTeacherForPayout(null)}>
+              <Button type="submit" variant="secondary">
+                تسديد فقط
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setSelectedTeacherForPayout(null)}>
                 إلغاء
               </Button>
             </div>
@@ -332,7 +1226,7 @@ export const Payroll: React.FC = () => {
       <Drawer
         isOpen={!!activeTeacher}
         onClose={() => setActiveTeacherId(null)}
-        title={`كشف مستحقات: ${activeTeacher?.fullName}`}
+        title={`كشف حساب ومستحقات: ${activeTeacher?.fullName}`}
         subtitle={`طريقة الأتعاب: ${
           activeTeacher?.compensationType === 'percentage_per_course'
             ? `${activeTeacher.commissionPercentage}% من سعر الدورة`
@@ -351,23 +1245,81 @@ export const Payroll: React.FC = () => {
                 backgroundColor: 'var(--color-primary-light)',
                 border: '1px solid var(--color-primary)',
                 borderRadius: 'var(--radius-lg)',
-                display: 'flex',
-                justifyContent: 'space-between',
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr 1fr',
+                gap: '12px',
                 fontSize: '0.8125rem',
               }}
             >
               <div>
-                <div style={{ color: 'var(--color-text-muted)' }}>المستحق الإجمالي للأستاذ</div>
-                <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-primary)', marginTop: '2px' }}>
+                <div style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>مستحق الدورة الحالية</div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-primary)', marginTop: '2px' }}>
                   {formatDZD(activeTeacher.totalEarned || 0)}
                 </div>
               </div>
+              <div>
+                <div style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>مسدد الدورة الحالية</div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-success)', marginTop: '2px' }}>
+                  {formatDZD(activeTeacher.totalPaid || 0)}
+                </div>
+              </div>
               <div style={{ textAlign: 'left' }}>
-                <div style={{ color: 'var(--color-text-muted)' }}>المتبقي في الذمة</div>
-                <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--color-warning)', marginTop: '2px' }}>
+                <div style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>المتبقي في الذمة</div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: (activeTeacher.balanceDue || 0) > 0 ? 'var(--color-warning)' : 'var(--color-success)', marginTop: '2px' }}>
                   {formatDZD(activeTeacher.balanceDue || 0)}
                 </div>
               </div>
+            </div>
+
+            {/* Print Voucher & Attendance Statement Buttons */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <Button
+                variant="primary"
+                onClick={() => openVoucherModal(activeTeacher)}
+                rightIcon={<Printer size={15} />}
+                style={{ justifyContent: 'center' }}
+              >
+                طباعة سند صرف أتعاب (80mm / A5)
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => handlePrintTeacherStatement(activeTeacher)}
+                rightIcon={<FileText size={15} />}
+                style={{ justifyContent: 'center' }}
+              >
+                كشف الحضور والغيابات المفصل
+              </Button>
+            </div>
+
+            {/* Reset / New Cycle Action Banner */}
+            <div
+              style={{
+                padding: '12px 14px',
+                backgroundColor: 'var(--color-bg-surface-secondary)',
+                border: '1px dashed var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
+                  بدء دورة حسابية جديدة للأستاذ
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '1px' }}>
+                  تصفية سجلات الدفع السابقة بعد انتهاء الدورة أو الشهر للبدء من الصفر
+                </div>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setTeacherToReset(activeTeacher)}
+                rightIcon={<RotateCcw size={13} />}
+              >
+                تصفية وبدء دورة جديدة
+              </Button>
             </div>
 
             {/* Courses list breakdown */}
@@ -385,9 +1337,7 @@ export const Payroll: React.FC = () => {
                   const enrolled = course.enrolledList?.length || 0;
                   const price = course.monthlyPrice || 0;
                   const grossRevenue = enrolled * price;
-                  const teacherShare = calculateCourseTeacherShare(activeTeacher, price, enrolled);
-                  const schoolShare = Math.max(0, grossRevenue - teacherShare);
-
+                  const teacherShare = calculateCourseTeacherShare(activeTeacher, course);
                   const compType = activeTeacher.compensationType || 'percentage_per_student';
 
                   return (
@@ -467,9 +1417,16 @@ export const Payroll: React.FC = () => {
             )}
 
             {/* Payout History Logs */}
-            <h4 style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)', marginTop: '8px' }}>
-              سجل الدفعات والمبالغ المسددة سابقاً
-            </h4>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+              <h4 style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                سجل الدفعات والمبالغ المسددة سابقاً
+              </h4>
+              {activeTeacher.payoutHistory && activeTeacher.payoutHistory.length > 0 && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                  إجمالي المسدد: <strong>{formatDZD(activeTeacher.totalPaid || 0)}</strong>
+                </span>
+              )}
+            </div>
 
             {(!activeTeacher.payoutHistory || activeTeacher.payoutHistory.length === 0) ? (
               <div style={{ textAlign: 'center', padding: '16px', color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>
@@ -477,37 +1434,427 @@ export const Payroll: React.FC = () => {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {activeTeacher.payoutHistory.map((log) => (
-                  <div
-                    key={log.id}
-                    style={{
-                      padding: '10px 12px',
-                      backgroundColor: 'var(--color-bg-surface-secondary)',
-                      borderRadius: 'var(--radius-md)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      fontSize: '0.8125rem',
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 700, color: 'var(--color-success)' }}>
-                        +{formatDZD(log.amount)}
+                {activeTeacher.payoutHistory.map((log) => {
+                  if (log.isCycleSettlement) {
+                    return (
+                      <div
+                        key={log.id}
+                        style={{
+                          padding: '8px 12px',
+                          backgroundColor: 'var(--color-primary-light)',
+                          border: '1px dashed var(--color-primary)',
+                          borderRadius: 'var(--radius-md)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          fontSize: '0.75rem',
+                          color: 'var(--color-primary)',
+                          fontWeight: 600,
+                          margin: '2px 0',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <CheckCircle size={14} />
+                          <span>{log.notes || 'تمت تسوية الحساب وبدء دورة جديدة'}</span>
+                        </div>
+                        <span style={{ fontSize: '0.6875rem', opacity: 0.85 }}>
+                          {formatDateArabic(log.date)}
+                        </span>
                       </div>
-                      <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-                        {log.paymentMethod} {log.notes ? `• ${log.notes}` : ''}
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={log.id}
+                      style={{
+                        padding: '10px 12px',
+                        backgroundColor: 'var(--color-bg-surface-secondary)',
+                        borderRadius: 'var(--radius-md)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        fontSize: '0.8125rem',
+                        border: '1px solid var(--color-border)',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 700, color: 'var(--color-success)' }}>
+                          +{formatDZD(log.amount)}
+                        </div>
+                        <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                          {log.paymentMethod} {log.notes ? `• ${log.notes}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
+                          {formatDateArabic(log.date)}
+                        </span>
+                        <button
+                          onClick={() =>
+                            openVoucherModal(
+                              activeTeacher,
+                              log.amount,
+                              log.paymentMethod,
+                              log.notes,
+                              undefined,
+                              log.date
+                            )
+                          }
+                          title="طباعة سند صرف لهذه الدفعة (80mm أو A5)"
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--color-primary)',
+                            padding: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            borderRadius: '4px',
+                            transition: 'background-color 0.2s',
+                          }}
+                        >
+                          <Printer size={15} />
+                        </button>
+                        <button
+                          onClick={() =>
+                            setPayoutToDelete({
+                              teacherId: activeTeacher.id,
+                              teacherName: activeTeacher.fullName,
+                              log,
+                            })
+                          }
+                          title="حذف هذا السجل"
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--color-danger)',
+                            padding: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            borderRadius: '4px',
+                            transition: 'background-color 0.2s',
+                          }}
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </div>
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
-                      {formatDateArabic(log.date)}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         )}
       </Drawer>
+
+      {/* Delete Payout Confirmation Modal */}
+      <Modal
+        isOpen={!!payoutToDelete}
+        onClose={() => setPayoutToDelete(null)}
+        title="تأكيد حذف دفعة مسددة"
+        description="هل أنت متأكد من رغبتك في حذف هذا السجل المالي؟"
+      >
+        {payoutToDelete && (
+          <div>
+            <div
+              style={{
+                padding: '12px 14px',
+                backgroundColor: 'var(--color-danger-light, #fee2e2)',
+                color: 'var(--color-danger)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.875rem',
+                marginBottom: 'var(--space-4)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              <AlertTriangle size={18} />
+              <span>
+                سيتم حذف دفعة بقيمة <strong>{formatDZD(payoutToDelete.log.amount)}</strong> وإعادة إضافتها إلى المتبقي في ذمة الأستاذ <strong>{payoutToDelete.teacherName}</strong>.
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '8px' }}>
+              <Button variant="danger" onClick={confirmDeletePayout}>
+                تأكيد الحذف
+              </Button>
+              <Button variant="secondary" onClick={() => setPayoutToDelete(null)}>
+                إلغاء
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Reset Payroll Cycle Confirmation Modal */}
+      <Modal
+        isOpen={!!teacherToReset}
+        onClose={() => setTeacherToReset(null)}
+        title="تسوية مستحقات الأستاذ وبدء دورة جديدة"
+        description={`إغلاق الدورة الحسابية الحالية للأستاذ: ${teacherToReset?.fullName}`}
+      >
+        {teacherToReset && (
+          <div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-4)', lineHeight: 1.6 }}>
+              عند تأكيد هذا الإجراء، سيتم تسجيل إغلاق وتسوية الدورة **مع الاحتفاظ بكامل سجل الدفعات والمبالغ المسددة سابقاً** كأرشيف دائم، لبدء دورة جديدة وتسجيل بيانات وأفواج لاحقة دون فقدان السجلات المالية القديمة.
+            </p>
+
+            <div
+              style={{
+                padding: '12px 14px',
+                backgroundColor: 'var(--color-bg-surface-secondary)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.8125rem',
+                marginBottom: 'var(--space-4)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                <span>مستحقات الدورة الحالية المسواة:</span>
+                <strong style={{ color: 'var(--color-primary)' }}>{formatDZD(teacherToReset.totalEarned || 0)}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                <span>المبالغ المسددة في هذه الدورة:</span>
+                <strong style={{ color: 'var(--color-success)' }}>{formatDZD(teacherToReset.totalPaid || 0)}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                <span>المتبقي في الذمة:</span>
+                <strong style={{ color: (teacherToReset.balanceDue || 0) > 0 ? 'var(--color-warning)' : 'var(--color-success)' }}>
+                  {formatDZD(teacherToReset.balanceDue || 0)}
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--color-border)', paddingTop: '6px', marginTop: '6px' }}>
+                <span>سجل الدفعات المحفوظة في الأرشيف:</span>
+                <strong>{(teacherToReset.payoutHistory || []).filter(p => !p.isCycleSettlement).length} دفعات</strong>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '8px', lineHeight: 1.4 }}>
+                ستبدأ الدورة الجديدة برصيد 0 دج وتتراكم أتعاب الأستاذ تلقائياً مع كل حصة حضور أو غياب محسوب تسجل لاحقاً.
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '8px' }}>
+              <Button variant="primary" onClick={confirmResetPayroll}>
+                تأكيد التسوية وبدء دورة جديدة
+              </Button>
+              <Button variant="secondary" onClick={() => setTeacherToReset(null)}>
+                إلغاء
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Teacher Payout Voucher Modal (80mm & A5) */}
+      <Modal
+        isOpen={!!voucherToPrint}
+        onClose={() => setVoucherToPrint(null)}
+        title="طباعة سند صرف أتعاب ومستحقات الأستاذ"
+        description="معاينة سند الصرف واختيار مقاس الطباعة (طابعة إيصالات حرارية 80mm أو ورق A5)"
+      >
+        {voucherToPrint && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            {/* Paper size switcher pills */}
+            <div
+              style={{
+                display: 'flex',
+                gap: '8px',
+                padding: '6px',
+                backgroundColor: 'var(--color-bg-surface-secondary)',
+                borderRadius: 'var(--radius-md)',
+                alignItems: 'center',
+              }}
+            >
+              <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-secondary)', marginLeft: '6px' }}>
+                نوع الطباعة:
+              </span>
+              <button
+                type="button"
+                onClick={() => setVoucherPaperSize('80mm')}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: voucherPaperSize === '80mm' ? '2px solid var(--color-primary)' : '1px solid var(--color-border)',
+                  backgroundColor: voucherPaperSize === '80mm' ? 'var(--color-primary-light)' : 'var(--color-bg-surface)',
+                  color: voucherPaperSize === '80mm' ? 'var(--color-primary)' : 'var(--color-text-primary)',
+                  fontWeight: voucherPaperSize === '80mm' ? 700 : 500,
+                  cursor: 'pointer',
+                  fontSize: '0.8125rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>طابعة حرارية (80mm Thermal)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoucherPaperSize('A5')}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: voucherPaperSize === 'A5' ? '2px solid var(--color-primary)' : '1px solid var(--color-border)',
+                  backgroundColor: voucherPaperSize === 'A5' ? 'var(--color-primary-light)' : 'var(--color-bg-surface)',
+                  color: voucherPaperSize === 'A5' ? 'var(--color-primary)' : 'var(--color-text-primary)',
+                  fontWeight: voucherPaperSize === 'A5' ? 700 : 500,
+                  cursor: 'pointer',
+                  fontSize: '0.8125rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>ورق عادي / ملون (A5 Standard)</span>
+              </button>
+            </div>
+
+            {/* Live Voucher Preview Card */}
+            <div
+              style={{
+                border: '1.5px dashed var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                padding: '16px',
+                backgroundColor: 'var(--color-bg-surface)',
+                maxWidth: voucherPaperSize === '80mm' ? '360px' : '100%',
+                margin: '0 auto',
+                width: '100%',
+                boxShadow: 'var(--shadow-sm)',
+              }}
+            >
+              <div style={{ textAlign: 'center', borderBottom: '1px solid var(--color-border)', paddingBottom: '10px', marginBottom: '10px' }}>
+                <div style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--color-text-primary)' }}>
+                  {currentSchool?.name || 'مدرستي التعليمية'}
+                </div>
+                <Badge variant="primary" style={{ marginTop: '4px' }}>
+                  سند صرف وتصفية أتعاب أستاذ ({voucherPaperSize})
+                </Badge>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '4px' }}>
+                  رقم السند: <strong>{voucherToPrint.voucherNumber}</strong> • {voucherToPrint.date}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.8125rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--color-text-muted)' }}>اسم الأستاذ:</span>
+                  <strong>{voucherToPrint.teacher.fullName}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--color-text-muted)' }}>المادة والتخصص:</span>
+                  <span>{voucherToPrint.teacher.subject} • {voucherToPrint.teacher.specialization}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--color-text-muted)' }}>طريقة الأتعاب والنسبة:</span>
+                  <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>
+                    نسبة الأستاذ {voucherToPrint.teacher.commissionPercentage || 60}% مقابل {100 - (voucherToPrint.teacher.commissionPercentage || 60)}% للمؤسسة
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--color-text-muted)' }}>طريقة الصرف:</span>
+                  <span>{voucherToPrint.payoutMethod}</span>
+                </div>
+
+                {/* Courses Count & Sessions summary */}
+                <div
+                  style={{
+                    marginTop: '6px',
+                    padding: '8px 10px',
+                    backgroundColor: 'var(--color-bg-surface-secondary)',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>الأفواج والحصص المؤطرة:</div>
+                  {getTeacherCourses(voucherToPrint.teacher.id).map(c => {
+                    const list = c.enrolledList || [];
+                    const count = list.reduce((maxSess, std) => {
+                      const logs = std.attendanceLogs || [];
+                      const sCount = logs.length > 0
+                        ? logs.filter((l) => l.status === 'present' || l.status === 'absent_counted').length
+                        : (std.attendedSessions || 0);
+                      return Math.max(maxSess, sCount);
+                    }, 0);
+                    return (
+                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                        <span>• {c.title} ({c.academicLevel})</span>
+                        <span style={{ fontWeight: 600 }}>{count}/{c.totalSessionsDefault || 5} حصص ({list.length} تلميذ)</span>
+                      </div>
+                    );
+                  })}
+                  {getTeacherCourses(voucherToPrint.teacher.id).length === 0 && (
+                    <div style={{ color: 'var(--color-text-muted)' }}>لا توجد دورات مسندة حالياً</div>
+                  )}
+                </div>
+
+                {/* Payment Amount Box */}
+                <div
+                  style={{
+                    marginTop: '8px',
+                    padding: '12px',
+                    backgroundColor: 'var(--color-primary-light)',
+                    border: '1.5px solid var(--color-primary)',
+                    borderRadius: 'var(--radius-md)',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: '0.75rem', color: 'var(--color-primary)', fontWeight: 600 }}>المبلغ المسدد والمصروف:</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--color-primary)', margin: '2px 0' }}>
+                    {formatDZD(voucherToPrint.payoutAmount)}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                    فقط {formatDZDInWords(voucherToPrint.payoutAmount)}
+                  </div>
+                </div>
+
+                {voucherToPrint.notes && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                    ملاحظات: {voucherToPrint.notes}
+                  </div>
+                )}
+
+                {/* Signature placeholders preview */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '8px',
+                    marginTop: '10px',
+                    textAlign: 'center',
+                    fontSize: '0.7rem',
+                  }}
+                >
+                  <div style={{ border: '1px dashed var(--color-border)', borderRadius: '4px', padding: '6px' }}>
+                    <strong>توقيع واستلام الأستاذ</strong>
+                    <div style={{ height: '24px' }}></div>
+                  </div>
+                  <div style={{ border: '1px dashed var(--color-border)', borderRadius: '4px', padding: '6px' }}>
+                    <strong>ختم واعتماد الإدارة</strong>
+                    <div style={{ height: '24px' }}></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions footer */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--space-2)' }}>
+              <Button
+                variant="primary"
+                onClick={() => handlePrintTeacherVoucher(voucherToPrint, voucherPaperSize)}
+                rightIcon={<Printer size={16} />}
+              >
+                طباعة السند الآن ({voucherPaperSize})
+              </Button>
+              <Button variant="secondary" onClick={() => setVoucherToPrint(null)}>
+                إلغاء
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

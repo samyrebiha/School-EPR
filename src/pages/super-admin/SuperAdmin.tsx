@@ -651,7 +651,7 @@ export const SuperAdmin: React.FC<SuperAdminProps> = ({ onExit }) => {
                               title="نسخ بيانات الدخول للمدرسة"
                             >
                               {isCopied ? <CheckCircle size={13} /> : <Copy size={13} />}
-                              <span>{isCopied ? 'تم النسخ ✓' : 'نسخ البيانات'}</span>
+                              <span>{isCopied ? 'تم النسخ' : 'نسخ البيانات'}</span>
                             </button>
                           </div>
                         </div>

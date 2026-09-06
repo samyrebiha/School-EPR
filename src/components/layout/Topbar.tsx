@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useSchool } from '../../contexts/SchoolContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { ShieldCheck, UserCheck, Lock } from 'lucide-react';
 
 export interface TopbarProps {
   onOpenSearch: () => void;
@@ -18,7 +19,7 @@ export const Topbar: React.FC<TopbarProps> = ({
   onToggleMobileSidebar,
 }) => {
   const { currentSchool } = useSchool();
-  const { logout } = useAuth();
+  const { logout, isReceptionMode, isAdminMode, switchToReception, switchToAdmin } = useAuth();
 
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -107,7 +108,66 @@ export const Topbar: React.FC<TopbarProps> = ({
       </div>
 
       {/* Left Side (RTL End): School Account & Logout */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2-5)', flexShrink: 0 }}>
+        {/* Mode Indicator Badge */}
+        {isAdminMode ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-2)',
+              padding: 'var(--space-1-5) var(--space-2-5)',
+              backgroundColor: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              color: '#1d4ed8',
+            }}
+          >
+            <ShieldCheck size={15} color="#2563eb" />
+            <span className="sm:hidden">وضع الإدارة</span>
+            <button
+              onClick={() => switchToReception()}
+              title="قفل الواجهة والعودة لمكتب الاستقبال"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px',
+                padding: '2px 6px',
+                backgroundColor: '#ffffff',
+                border: '1px solid #93c5fd',
+                borderRadius: 'var(--radius-xs)',
+                fontSize: '0.6875rem',
+                color: '#1e40af',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              <Lock size={11} /> قفل للاستقبال
+            </button>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-1-5)',
+              padding: 'var(--space-1-5) var(--space-2-5)',
+              backgroundColor: 'var(--color-bg-surface-secondary)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              color: 'var(--color-text-secondary)',
+            }}
+            title="واجهة الاستقبال"
+          >
+            <UserCheck size={14} color="var(--color-primary)" />
+            <span>واجهة الاستقبال</span>
+          </div>
+        )}
+
         {/* School Name Badge */}
         <div
           style={{

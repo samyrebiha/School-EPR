@@ -1,4 +1,5 @@
-export type UserRole = 'school_owner';
+export type UserRole = 'school_owner' | 'receptionist';
+export type AppPortalMode = 'reception' | 'admin';
 
 export interface User {
   id: string;
@@ -31,11 +32,18 @@ export interface SchoolTenant {
 
 export type PaymentStatus = 'paid' | 'partial' | 'unpaid' | 'overdue';
 
+export type AttendanceLogStatus = 'present' | 'absent_counted' | 'absent_uncounted' | 'renewed' | 'payment';
+
 export interface SessionAttendanceLog {
   id: string;
   sessionNumber: number;
   date: string;
   time: string;
+  status?: AttendanceLogStatus;
+  type?: AttendanceLogStatus;
+  notes?: string;
+  amount?: number;
+  receiptNumber?: string;
 }
 
 export interface TeacherPayoutLog {
@@ -44,6 +52,8 @@ export interface TeacherPayoutLog {
   date: string;
   paymentMethod: string;
   notes?: string;
+  isCycleSettlement?: boolean;
+  settledEarned?: number;
 }
 
 export interface Student {
@@ -63,6 +73,9 @@ export interface Student {
   attendanceLogs?: SessionAttendanceLog[];
   status: 'active' | 'inactive';
   registrationDate: string;
+  schoolRegistrationPaid?: boolean;
+  schoolRegistrationAmount?: number;
+  schoolRegistrationDate?: string;
   notes?: string;
 }
 
@@ -70,6 +83,7 @@ export type TeacherCompensationType = 'percentage_per_student' | 'percentage_per
 
 export interface Teacher {
   id: string;
+  schoolId?: string;
   fullName: string;
   phone: string;
   email: string;
@@ -82,12 +96,17 @@ export interface Teacher {
   totalEarned: number;
   totalPaid: number;
   balanceDue: number;
+  settledEarned?: number;
+  lastSettledDate?: string;
+  totalAttendedSessions?: number;
+  totalCountedAbsences?: number;
   payoutHistory?: TeacherPayoutLog[];
   status: 'active' | 'inactive';
 }
 
 export interface Course {
   id: string;
+  schoolId?: string;
   title: string;
   subject: string;
   academicLevel: string;
@@ -107,6 +126,7 @@ export interface Course {
 
 export interface Classroom {
   id: string;
+  schoolId?: string;
   name: string;
   roomNumber: string;
   capacity: number;
@@ -131,9 +151,11 @@ export type PaymentMethod = 'cash' | 'baridimob' | 'ccp' | 'bank_transfer';
 
 export interface PaymentTransaction {
   id: string;
+  schoolId?: string;
   receiptNumber: string;
   studentId: string;
   studentName: string;
+  studentPhone?: string;
   courseTitle: string;
   amount: number; // in DZD
   paymentMethod: PaymentMethod;
@@ -141,10 +163,13 @@ export interface PaymentTransaction {
   status: 'completed' | 'pending' | 'cancelled';
   recordedBy: string;
   notes?: string;
+  feeCategory?: 'course' | 'registration_fee';
+  type?: string;
 }
 
 export interface DebtRecord {
   id: string;
+  schoolId?: string;
   studentId: string;
   studentName: string;
   studentPhone: string;
@@ -167,4 +192,19 @@ export interface DashboardKPIs {
   revenueGrowth: number;
   totalDebts: number;
   unpaidStudentsCount: number;
+}
+
+export type ExpenseCategory = 'salary' | 'electricity' | 'internet' | 'rent' | 'supplies' | 'maintenance' | 'other';
+
+export interface Expense {
+  id: string;
+  schoolId?: string;
+  receiptNumber: string;
+  title: string;
+  category: ExpenseCategory;
+  amount: number; // in DZD
+  date: string;
+  recipientName?: string; // اسم المستلم أو العامل
+  paymentMethod?: string;
+  notes?: string;
 }

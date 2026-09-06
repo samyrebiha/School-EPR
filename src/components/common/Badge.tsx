@@ -7,6 +7,7 @@ export interface BadgeProps {
   variant?: BadgeVariant;
   withDot?: boolean;
   className?: string;
+  style?: React.CSSProperties;
 }
 
 export const Badge: React.FC<BadgeProps> = ({
@@ -14,9 +15,10 @@ export const Badge: React.FC<BadgeProps> = ({
   variant = 'neutral',
   withDot = true,
   className = '',
+  style,
 }) => {
   return (
-    <span className={`badge badge-${variant} ${className}`}>
+    <span className={`badge badge-${variant} ${className}`} style={style}>
       {withDot && <span className="badge-dot" />}
       <span>{children}</span>
     </span>

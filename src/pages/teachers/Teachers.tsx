@@ -18,6 +18,8 @@ import { Teacher, TeacherCompensationType } from '../../types';
 import { formatAlgerianPhone, formatDZD } from '../../utils/formatters';
 import { useToast } from '../../contexts/ToastContext';
 import { useData } from '../../contexts/DataContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { ACADEMIC_LEVEL_OPTIONS, DEFAULT_ACADEMIC_LEVEL } from '../../data/academicLevels';
 
 export interface TeachersProps {
   isAddModalOpenInitially?: boolean;
@@ -29,6 +31,7 @@ export const Teachers: React.FC<TeachersProps> = ({
   onCloseAddModalInitially,
 }) => {
   const { success } = useToast();
+  const { isReceptionMode } = useAuth();
   const { teachers, addTeacher, deleteTeacher } = useData();
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(isAddModalOpenInitially);
@@ -39,7 +42,7 @@ export const Teachers: React.FC<TeachersProps> = ({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [subject, setSubject] = useState('');
-  const [specialization, setSpecialization] = useState('');
+  const [specialization, setSpecialization] = useState(DEFAULT_ACADEMIC_LEVEL);
   const [compensationType, setCompensationType] = useState<TeacherCompensationType>('percentage_per_student');
   const [commissionPercentage, setCommissionPercentage] = useState('60');
   const [fixedCourseRate, setFixedCourseRate] = useState('25000');
@@ -54,7 +57,7 @@ export const Teachers: React.FC<TeachersProps> = ({
       phone: phone.trim(),
       email: email.trim() || `${phone.trim()}@school.dz`,
       subject: subject.trim(), // Free text
-      specialization: specialization.trim() || 'الطور الثانوي والمتوسط',
+      specialization: specialization.trim() || DEFAULT_ACADEMIC_LEVEL,
       compensationType,
       commissionPercentage: Number(commissionPercentage) || 60,
       fixedCourseRate: Number(fixedCourseRate) || 25000,
@@ -83,7 +86,7 @@ export const Teachers: React.FC<TeachersProps> = ({
     setPhone('');
     setEmail('');
     setSubject('');
-    setSpecialization('');
+    setSpecialization(DEFAULT_ACADEMIC_LEVEL);
     setCompensationType('percentage_per_student');
     setCommissionPercentage('60');
     setFixedCourseRate('25000');
@@ -96,7 +99,7 @@ export const Teachers: React.FC<TeachersProps> = ({
     setTeacherToDelete(null);
   };
 
-  const columns: Column<Teacher>[] = [
+  const allColumns: Column<Teacher>[] = [
     {
       key: 'fullName',
       header: 'اسم الأستاذ',
@@ -124,7 +127,7 @@ export const Teachers: React.FC<TeachersProps> = ({
               {t.fullName}
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-              {formatAlgerianPhone(t.phone)}
+              {formatAlgerianPhone(t.phone)} {t.specialization ? `• ${t.specialization}` : ''}
             </div>
           </div>
         </div>
@@ -253,6 +256,10 @@ export const Teachers: React.FC<TeachersProps> = ({
     },
   ];
 
+  const columns = isReceptionMode
+    ? allColumns.filter((c) => c.key !== 'compensationType')
+    : allColumns;
+
   return (
     <div>
       <PageHeader
@@ -323,11 +330,12 @@ export const Teachers: React.FC<TeachersProps> = ({
               onChange={(e) => setSubject(e.target.value)}
               required
             />
-            <Input
-              label="التخصص والأطوار المستهدفة (نص حر)"
-              placeholder="مثال: 3 ثانوي (بكالوريا)"
+            <Select
+              label="الطور / المستوى الدراسي"
               value={specialization}
               onChange={(e) => setSpecialization(e.target.value)}
+              options={ACADEMIC_LEVEL_OPTIONS}
+              required
             />
           </div>
 

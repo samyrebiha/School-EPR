@@ -75,6 +75,8 @@ CREATE TABLE public.teachers (
     fixed_course_rate NUMERIC(12, 2) DEFAULT 25000.00,
     status VARCHAR(50) DEFAULT 'active',
     payout_history JSONB DEFAULT '[]'::jsonb,
+    settled_earned NUMERIC(12, 2) DEFAULT 0.00,
+    last_settled_date DATE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -117,6 +119,7 @@ CREATE TABLE public.payment_transactions (
     date DATE DEFAULT CURRENT_DATE NOT NULL,
     status VARCHAR(50) DEFAULT 'completed',
     recorded_by VARCHAR(100) DEFAULT 'إدارة المؤسسة',
+    fee_type VARCHAR(50) DEFAULT 'course_fee',
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -140,7 +143,24 @@ CREATE TABLE public.debts (
 );
 
 -- ====================================================================
--- 9. فهارس تسريع الأداء والبحث (Indexes)
+-- 9. EXPENSES TABLE (سجل المصاريف والنفقات التشغيلية وأجور العمال)
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS public.expenses (
+    id TEXT PRIMARY KEY,
+    school_id TEXT REFERENCES public.schools(id) ON DELETE CASCADE,
+    receipt_number VARCHAR(100) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    category VARCHAR(50) DEFAULT 'other',
+    amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    recipient_name VARCHAR(255),
+    date DATE DEFAULT CURRENT_DATE NOT NULL,
+    payment_method VARCHAR(50) DEFAULT 'نقداً',
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- ====================================================================
+-- 10. فهارس تسريع الأداء والبحث (Indexes)
 -- ====================================================================
 CREATE INDEX IF NOT EXISTS idx_schools_code ON public.schools(code);
 CREATE INDEX IF NOT EXISTS idx_schools_username ON public.schools(username);
@@ -149,9 +169,11 @@ CREATE INDEX IF NOT EXISTS idx_teachers_school_id ON public.teachers(school_id);
 CREATE INDEX IF NOT EXISTS idx_courses_school_id ON public.courses(school_id);
 CREATE INDEX IF NOT EXISTS idx_payments_school_id ON public.payment_transactions(school_id);
 CREATE INDEX IF NOT EXISTS idx_debts_school_id ON public.debts(school_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_school_id ON public.expenses(school_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON public.expenses(date);
 
 -- ====================================================================
--- 10. تفعيل الـ RLS على كافة الجداول (Row Level Security)
+-- 11. تفعيل الـ RLS على كافة الجداول (Row Level Security)
 -- ====================================================================
 ALTER TABLE public.schools ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.classrooms ENABLE ROW LEVEL SECURITY;
@@ -159,6 +181,13 @@ ALTER TABLE public.teachers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.courses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.payment_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.debts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
+
+-- 7. سياسات المصاريف
+CREATE POLICY "Allow Select Expenses" ON public.expenses FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Allow Insert Expenses" ON public.expenses FOR INSERT TO anon, authenticated WITH CHECK (id IS NOT NULL AND auth.role() IN ('anon', 'authenticated'));
+CREATE POLICY "Allow Update Expenses" ON public.expenses FOR UPDATE TO anon, authenticated USING (id IS NOT NULL AND auth.role() IN ('anon', 'authenticated')) WITH CHECK (id IS NOT NULL);
+CREATE POLICY "Allow Delete Expenses" ON public.expenses FOR DELETE TO anon, authenticated USING (id IS NOT NULL AND auth.role() IN ('anon', 'authenticated'));
 
 -- ====================================================================
 -- 11. سياسات الأمان المحددة لكل عملية (توافق 100% مع Supabase Linter)

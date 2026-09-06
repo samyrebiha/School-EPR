@@ -17,10 +17,11 @@ import { Payments } from './pages/payments/Payments';
 import { Payroll } from './pages/payroll/Payroll';
 import { Reports } from './pages/reports/Reports';
 import { Settings } from './pages/settings/Settings';
+import { Students } from './pages/students/Students';
 import { SuperAdmin } from './pages/super-admin/SuperAdmin';
 
 function AppContent() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isReceptionMode } = useAuth();
   const [activePage, setActivePage] = useState<string>('dashboard');
 
   // Direct modal trigger states for Quick Actions
@@ -28,6 +29,13 @@ function AppContent() {
   const [openAddCourseModal, setOpenAddCourseModal] = useState(false);
   const [openAddTeacherModal, setOpenAddTeacherModal] = useState(false);
   const [openAddRoomModal, setOpenAddRoomModal] = useState(false);
+
+  // If in reception mode and currently on an admin-only page, redirect to dashboard
+  useEffect(() => {
+    if (isReceptionMode && ['payroll', 'reports', 'settings', 'students'].includes(activePage)) {
+      setActivePage('dashboard');
+    }
+  }, [isReceptionMode, activePage]);
 
   // Secret URL listener for Super Admin Portal (#super-admin or ?portal=super-admin)
   useEffect(() => {
@@ -128,6 +136,12 @@ function AppContent() {
         return <Reports />;
       case 'settings':
         return <Settings />;
+      case 'students':
+        return !isReceptionMode ? (
+          <Students />
+        ) : (
+          <Dashboard onNavigate={(page) => setActivePage(page)} />
+        );
       default:
         return <Dashboard onNavigate={(page) => setActivePage(page)} />;
     }

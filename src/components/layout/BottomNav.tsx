@@ -12,6 +12,7 @@ import {
   FileBarChart,
   X,
 } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
 
 export type QuickActionType = 'payment' | 'course' | 'teacher' | 'room' | 'reports';
 
@@ -26,6 +27,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   onNavigate,
   onTriggerQuickAction,
 }) => {
+  const { isReceptionMode } = useAuth();
   const [isQuickActionOpen, setIsQuickActionOpen] = useState(false);
 
   const navItems = [
@@ -174,19 +176,40 @@ export const BottomNav: React.FC<BottomNavProps> = ({
                 </div>
               </button>
 
-              <button
-                type="button"
-                className="mobile-quick-action-btn"
-                onClick={() => handleAction('reports')}
-              >
-                <div className="mobile-quick-action-icon" style={{ backgroundColor: 'rgba(23, 107, 103, 0.1)', color: 'var(--color-primary)' }}>
-                  <FileBarChart size={22} color="var(--color-primary)" />
-                </div>
-                <div className="mobile-quick-action-text">
-                  <div className="mobile-quick-action-title">التقارير والإحصائيات</div>
-                  <div className="mobile-quick-action-desc">استخراج وطباعة تقرير PDF</div>
-                </div>
-              </button>
+              {!isReceptionMode && (
+                <button
+                  type="button"
+                  className="mobile-quick-action-btn"
+                  onClick={() => {
+                    setIsQuickActionOpen(false);
+                    onNavigate('students');
+                  }}
+                >
+                  <div className="mobile-quick-action-icon" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: '#2563eb' }}>
+                    <GraduationCap size={22} color="#2563eb" />
+                  </div>
+                  <div className="mobile-quick-action-text">
+                    <div className="mobile-quick-action-title">إدارة وسجل التلاميذ</div>
+                    <div className="mobile-quick-action-desc">عرض قائمة كل التلاميذ والاشتراكات</div>
+                  </div>
+                </button>
+              )}
+
+              {!isReceptionMode && (
+                <button
+                  type="button"
+                  className="mobile-quick-action-btn"
+                  onClick={() => handleAction('reports')}
+                >
+                  <div className="mobile-quick-action-icon" style={{ backgroundColor: 'rgba(23, 107, 103, 0.1)', color: 'var(--color-primary)' }}>
+                    <FileBarChart size={22} color="var(--color-primary)" />
+                  </div>
+                  <div className="mobile-quick-action-text">
+                    <div className="mobile-quick-action-title">التقارير والإحصائيات</div>
+                    <div className="mobile-quick-action-desc">استخراج وطباعة تقرير PDF</div>
+                  </div>
+                </button>
+              )}
             </div>
           </div>
         </div>

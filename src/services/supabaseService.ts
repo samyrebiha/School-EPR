@@ -6,6 +6,7 @@ import {
   Classroom,
   PaymentTransaction,
   DebtRecord,
+  Expense,
 } from '../types';
 
 /**
@@ -108,6 +109,7 @@ export const supabaseService = {
 
       return data.map((r: any) => ({
         id: r.id,
+        schoolId: r.school_id || undefined,
         name: r.name,
         roomNumber: r.room_number || '',
         capacity: r.capacity || 25,
@@ -121,9 +123,10 @@ export const supabaseService = {
 
   async upsertClassroom(classroom: Classroom, schoolId?: string) {
     return withRetry(async () => {
+      const targetSchoolId = schoolId || classroom.schoolId || null;
       const { error } = await supabase.from('classrooms').upsert({
         id: String(classroom.id),
-        school_id: schoolId || null,
+        school_id: targetSchoolId,
         name: classroom.name,
         room_number: classroom.roomNumber || null,
         capacity: Number(classroom.capacity) || 25,
@@ -156,31 +159,39 @@ export const supabaseService = {
       const { data, error } = await query;
       if (error || !data) return null;
 
-      return data.map((t: any) => ({
-        id: t.id,
-        fullName: t.full_name,
-        phone: t.phone,
-        email: t.email || '',
-        subject: t.subject,
-        specialization: t.specialization || '',
-        compensationType: t.compensation_type || 'percentage_per_student',
-        commissionPercentage: t.commission_percentage !== null ? Number(t.commission_percentage) : 60,
-        fixedCourseRate: t.fixed_course_rate !== null ? Number(t.fixed_course_rate) : 25000,
-        status: t.status || 'active',
-        groupsCount: 0,
-        totalEarned: 0,
-        totalPaid: 0,
-        balanceDue: 0,
-        payoutHistory: t.payout_history || [],
-      }));
+      return data.map((t: any) => {
+        const payoutHistory = Array.isArray(t.payout_history) ? t.payout_history : [];
+
+        return {
+          id: t.id,
+          schoolId: t.school_id || undefined,
+          fullName: t.full_name,
+          phone: t.phone,
+          email: t.email || '',
+          subject: t.subject,
+          specialization: t.specialization || '',
+          compensationType: t.compensation_type || 'percentage_per_student',
+          commissionPercentage: t.commission_percentage !== null ? Number(t.commission_percentage) : 60,
+          fixedCourseRate: t.fixed_course_rate !== null ? Number(t.fixed_course_rate) : 25000,
+          status: t.status || 'active',
+          settledEarned: t.settled_earned !== null ? Number(t.settled_earned) : 0,
+          lastSettledDate: t.last_settled_date || undefined,
+          groupsCount: 0,
+          totalEarned: 0,
+          totalPaid: 0,
+          balanceDue: 0,
+          payoutHistory,
+        };
+      });
     });
   },
 
   async upsertTeacher(teacher: Teacher, schoolId?: string) {
     return withRetry(async () => {
+      const targetSchoolId = schoolId || teacher.schoolId || null;
       const { error } = await supabase.from('teachers').upsert({
         id: String(teacher.id),
-        school_id: schoolId || null,
+        school_id: targetSchoolId,
         full_name: teacher.fullName,
         phone: teacher.phone,
         email: teacher.email || null,
@@ -191,6 +202,8 @@ export const supabaseService = {
         fixed_course_rate: teacher.fixedCourseRate,
         status: teacher.status || 'active',
         payout_history: teacher.payoutHistory || [],
+        settled_earned: teacher.settledEarned || 0,
+        last_settled_date: teacher.lastSettledDate || null,
       });
 
       if (error) {
@@ -218,6 +231,7 @@ export const supabaseService = {
 
       return data.map((c: any) => ({
         id: c.id,
+        schoolId: c.school_id || undefined,
         title: c.title,
         subject: c.subject,
         academicLevel: c.academic_level,
@@ -239,9 +253,10 @@ export const supabaseService = {
 
   async upsertCourse(course: Course, schoolId?: string) {
     return withRetry(async () => {
+      const targetSchoolId = schoolId || course.schoolId || null;
       const { error } = await supabase.from('courses').upsert({
         id: String(course.id),
-        school_id: schoolId || null,
+        school_id: targetSchoolId,
         title: course.title,
         subject: course.subject,
         academic_level: course.academicLevel,
@@ -284,6 +299,7 @@ export const supabaseService = {
 
       return data.map((t: any) => ({
         id: t.id,
+        schoolId: t.school_id || undefined,
         receiptNumber: t.receipt_number,
         studentId: t.student_id,
         studentName: t.student_name,
@@ -300,9 +316,10 @@ export const supabaseService = {
 
   async insertTransaction(tx: PaymentTransaction, schoolId?: string) {
     return withRetry(async () => {
+      const targetSchoolId = schoolId || tx.schoolId || null;
       const { error } = await supabase.from('payment_transactions').upsert({
         id: String(tx.id),
-        school_id: schoolId || null,
+        school_id: targetSchoolId,
         receipt_number: tx.receiptNumber,
         student_id: tx.studentId || null,
         student_name: tx.studentName,
@@ -340,6 +357,7 @@ export const supabaseService = {
 
       return data.map((d: any) => ({
         id: d.id,
+        schoolId: d.school_id || undefined,
         studentId: d.student_id,
         studentName: d.student_name,
         studentPhone: d.student_phone || '',
@@ -355,9 +373,10 @@ export const supabaseService = {
 
   async upsertDebt(debt: DebtRecord, schoolId?: string) {
     return withRetry(async () => {
+      const targetSchoolId = schoolId || debt.schoolId || null;
       const { error } = await supabase.from('debts').upsert({
         id: String(debt.id),
-        school_id: schoolId || null,
+        school_id: targetSchoolId,
         student_id: debt.studentId || null,
         student_name: debt.studentName,
         student_phone: debt.studentPhone || null,
@@ -372,6 +391,67 @@ export const supabaseService = {
       if (error) {
         console.warn('Supabase debt notice:', error.message);
       }
+      return true;
+    });
+  },
+
+  async deleteDebt(debtId: string) {
+    return withRetry(async () => {
+      await supabase.from('debts').delete().eq('id', debtId);
+      return true;
+    });
+  },
+
+  // === EXPENSES ===
+  async fetchExpenses(schoolId?: string): Promise<Expense[] | null> {
+    return withRetry(async () => {
+      let query = supabase.from('expenses').select('*').order('date', { ascending: false });
+      if (schoolId) query = query.eq('school_id', schoolId);
+
+      const { data, error } = await query;
+      if (error || !data) return null;
+
+      return data.map((e: any) => ({
+        id: e.id,
+        schoolId: e.school_id || undefined,
+        receiptNumber: e.receipt_number || `EXP-${e.id.substring(0, 6)}`,
+        title: e.title,
+        category: e.category || 'other',
+        amount: Number(e.amount) || 0,
+        date: e.date,
+        recipientName: e.recipient_name || undefined,
+        paymentMethod: e.payment_method || 'نقداً',
+        notes: e.notes || undefined,
+      }));
+    });
+  },
+
+  async upsertExpense(expense: Expense, schoolId?: string) {
+    return withRetry(async () => {
+      const targetSchoolId = schoolId || expense.schoolId || null;
+      const { error } = await supabase.from('expenses').upsert({
+        id: String(expense.id),
+        school_id: targetSchoolId,
+        receipt_number: expense.receiptNumber,
+        title: expense.title,
+        category: expense.category,
+        amount: Number(expense.amount) || 0,
+        recipient_name: expense.recipientName || null,
+        date: expense.date || new Date().toISOString().split('T')[0],
+        payment_method: expense.paymentMethod || 'نقداً',
+        notes: expense.notes || null,
+      });
+
+      if (error) {
+        console.warn('Supabase expense notice:', error.message);
+      }
+      return true;
+    });
+  },
+
+  async deleteExpense(expenseId: string) {
+    return withRetry(async () => {
+      await supabase.from('expenses').delete().eq('id', expenseId);
       return true;
     });
   },

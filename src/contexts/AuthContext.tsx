@@ -1,11 +1,16 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
-import { User } from '../types';
+import { User, AppPortalMode } from '../types';
 
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
+  portalMode: AppPortalMode;
+  isAdminMode: boolean;
+  isReceptionMode: boolean;
   login: (schoolName: string, email?: string, schoolId?: string) => void;
   logout: () => void;
+  switchToAdmin: () => void;
+  switchToReception: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -16,6 +21,50 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const saved = localStorage.getItem('school_saas_auth_user');
     return saved ? JSON.parse(saved) : null;
   });
+
+  // Portal mode: Defaults to reception. Turns to admin if secret hash/param #admin is used or stored in session
+  const [portalMode, setPortalMode] = useState<AppPortalMode>(() => {
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    const search = typeof window !== 'undefined' ? window.location.search : '';
+    if (hash === '#admin' || hash === '#direction' || search.includes('portal=admin')) {
+      return 'admin';
+    }
+    const session = typeof window !== 'undefined' ? sessionStorage.getItem('school_portal_mode') : null;
+    return session === 'admin' ? 'admin' : 'reception';
+  });
+
+  // Listen to secret link/hash in the URL (e.g. #admin)
+  React.useEffect(() => {
+    const handleCheckSecretHash = () => {
+      const hash = window.location.hash;
+      const search = window.location.search;
+      if (hash === '#admin' || hash === '#direction' || search.includes('portal=admin')) {
+        setPortalMode('admin');
+        sessionStorage.setItem('school_portal_mode', 'admin');
+      } else if (hash === '#reception') {
+        setPortalMode('reception');
+        sessionStorage.setItem('school_portal_mode', 'reception');
+      }
+    };
+
+    window.addEventListener('hashchange', handleCheckSecretHash);
+    return () => window.removeEventListener('hashchange', handleCheckSecretHash);
+  }, []);
+
+  const switchToAdmin = () => {
+    setPortalMode('admin');
+    sessionStorage.setItem('school_portal_mode', 'admin');
+    window.location.hash = 'admin';
+  };
+
+  const switchToReception = () => {
+    setPortalMode('reception');
+    sessionStorage.setItem('school_portal_mode', 'reception');
+    // Clear hash without reload
+    if (window.location.hash === '#admin' || window.location.hash === '#direction') {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  };
 
   const login = (schoolName: string, email: string = 'admin@school.dz', schoolId: string = 'school-default') => {
     const newUser: User = {
@@ -39,8 +88,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       value={{
         user,
         isAuthenticated: !!user,
+        portalMode,
+        isAdminMode: portalMode === 'admin',
+        isReceptionMode: portalMode === 'reception',
         login,
         logout,
+        switchToAdmin,
+        switchToReception,
       }}
     >
       {children}

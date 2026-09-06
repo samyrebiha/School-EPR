@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   PlusCircle,
   Users,
@@ -8,6 +8,9 @@ import {
   UserPlus,
   Trash2,
   AlertTriangle,
+  Check,
+  CheckCircle2,
+  Calendar,
 } from 'lucide-react';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { DataTable, Column } from '../../components/data-table/DataTable';
@@ -20,6 +23,104 @@ import { Course, Student } from '../../types';
 import { formatDZD } from '../../utils/formatters';
 import { useToast } from '../../contexts/ToastContext';
 import { useData } from '../../contexts/DataContext';
+import { ACADEMIC_LEVEL_OPTIONS, DEFAULT_ACADEMIC_LEVEL } from '../../data/academicLevels';
+
+const ALL_WEEK_DAYS = [
+  { id: 'السبت', label: 'السبت' },
+  { id: 'الأحد', label: 'الأحد' },
+  { id: 'الإثنين', label: 'الإثنين' },
+  { id: 'الثلاثاء', label: 'الثلاثاء' },
+  { id: 'الأربعاء', label: 'الأربعاء' },
+  { id: 'الخميس', label: 'الخميس' },
+  { id: 'الجمعة', label: 'الجمعة' },
+];
+
+const PRESET_DAY_COMBOS = [
+  { label: 'السبت والثلاثاء', days: ['السبت', 'الثلاثاء'] },
+  { label: 'الجمعة والسبت', days: ['الجمعة', 'السبت'] },
+  { label: 'أحد، ثلاثاء، خميس', days: ['الأحد', 'الثلاثاء', 'الخميس'] },
+  { label: 'إثنين وأربعاء', days: ['الإثنين', 'الأربعاء'] },
+  { label: 'كل الأسبوع', days: ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'] },
+];
+
+const HOUR_OPTIONS = [
+  { value: '01', label: '01' },
+  { value: '02', label: '02' },
+  { value: '03', label: '03' },
+  { value: '04', label: '04' },
+  { value: '05', label: '05' },
+  { value: '06', label: '06' },
+  { value: '07', label: '07' },
+  { value: '08', label: '08' },
+  { value: '09', label: '09' },
+  { value: '10', label: '10' },
+  { value: '11', label: '11' },
+  { value: '12', label: '12' },
+];
+
+const MINUTE_OPTIONS = [
+  { value: '00', label: '00 (تماماً)' },
+  { value: '15', label: '15 (وربع)' },
+  { value: '30', label: '30 (ونصف)' },
+  { value: '45', label: '45 (إلا ربع)' },
+];
+
+const ARABIC_TIME_PRESETS = [
+  {
+    label: '05:00 - 07:00 مساءً',
+    startHour: '05',
+    startMinute: '00',
+    startPeriod: 'مساءً' as const,
+    endHour: '07',
+    endMinute: '00',
+    endPeriod: 'مساءً' as const,
+  },
+  {
+    label: '08:00 - 10:00 صباحاً',
+    startHour: '08',
+    startMinute: '00',
+    startPeriod: 'صباحاً' as const,
+    endHour: '10',
+    endMinute: '00',
+    endPeriod: 'صباحاً' as const,
+  },
+  {
+    label: '10:00 - 12:00 صباحاً',
+    startHour: '10',
+    startMinute: '00',
+    startPeriod: 'صباحاً' as const,
+    endHour: '12',
+    endMinute: '00',
+    endPeriod: 'مساءً' as const,
+  },
+  {
+    label: '02:00 - 04:00 بعد الزوال',
+    startHour: '02',
+    startMinute: '00',
+    startPeriod: 'مساءً' as const,
+    endHour: '04',
+    endMinute: '00',
+    endPeriod: 'مساءً' as const,
+  },
+  {
+    label: '04:00 - 06:00 عصراً',
+    startHour: '04',
+    startMinute: '00',
+    startPeriod: 'مساءً' as const,
+    endHour: '06',
+    endMinute: '00',
+    endPeriod: 'مساءً' as const,
+  },
+  {
+    label: '06:00 - 08:00 ليلاً',
+    startHour: '06',
+    startMinute: '00',
+    startPeriod: 'مساءً' as const,
+    endHour: '08',
+    endMinute: '00',
+    endPeriod: 'مساءً' as const,
+  },
+];
 
 export interface CoursesProps {
   onNavigate?: (page: string) => void;
@@ -33,7 +134,16 @@ export const Courses: React.FC<CoursesProps> = ({
   onCloseAddModalInitially,
 }) => {
   const { success, warning } = useToast();
-  const { courses, teachers, classrooms, addCourse, deleteCourse, enrollStudentToCourse } = useData();
+  const {
+    courses,
+    teachers,
+    classrooms,
+    transactions,
+    addCourse,
+    deleteCourse,
+    enrollStudentToCourse,
+    removeStudentFromCourse,
+  } = useData();
 
   const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
   const [courseForEnroll, setCourseForEnroll] = useState<Course | null>(null);
@@ -44,14 +154,27 @@ export const Courses: React.FC<CoursesProps> = ({
   // Add Course Form State
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState('الرياضيات');
-  const [academicLevel, setAcademicLevel] = useState('3 ثانوي (بكالوريا)');
+  const [academicLevel, setAcademicLevel] = useState(DEFAULT_ACADEMIC_LEVEL);
   const [teacherId, setTeacherId] = useState(teachers[0]?.id || '');
   const [monthlyPrice, setMonthlyPrice] = useState('6000');
   const [maxStudents, setMaxStudents] = useState('25');
   const [totalSessionsDefault, setTotalSessionsDefault] = useState('5');
   const [roomName, setRoomName] = useState(classrooms[0]?.name || '');
-  const [scheduleDays, setScheduleDays] = useState('السبت، الثلاثاء');
-  const [scheduleTime, setScheduleTime] = useState('17:00 - 19:00');
+  const [selectedDays, setSelectedDays] = useState<string[]>(['السبت', 'الثلاثاء']);
+  const [startHour, setStartHour] = useState('05');
+  const [startMinute, setStartMinute] = useState('00');
+  const [startPeriod, setStartPeriod] = useState<'صباحاً' | 'مساءً'>('مساءً');
+  const [endHour, setEndHour] = useState('07');
+  const [endMinute, setEndMinute] = useState('00');
+  const [endPeriod, setEndPeriod] = useState<'صباحاً' | 'مساءً'>('مساءً');
+
+  const formattedScheduleTime = `${startHour}:${startMinute} ${startPeriod} - ${endHour}:${endMinute} ${endPeriod}`;
+
+  const toggleDay = (dayId: string) => {
+    setSelectedDays((prev) =>
+      prev.includes(dayId) ? prev.filter((d) => d !== dayId) : [...prev, dayId]
+    );
+  };
 
   // Enroll Student Form State
   const [stdName, setStdName] = useState('');
@@ -59,6 +182,36 @@ export const Courses: React.FC<CoursesProps> = ({
   const [parentPhone, setParentPhone] = useState('');
   const [paidAmount, setPaidAmount] = useState('6000');
   const [studentTotalSessions, setStudentTotalSessions] = useState('5');
+
+  // Real-time check if student has paid the annual school registration fee (حقوق التسجيل / حقوق المدرسة)
+  const annualFeePayment = useMemo(() => {
+    const cleanName = stdName.trim().toLowerCase();
+    const cleanStdPhone = stdPhone.replace(/[\s-]/g, '');
+    const cleanParentPhone = parentPhone.replace(/[\s-]/g, '');
+
+    if (!cleanName && !cleanStdPhone && !cleanParentPhone) return null;
+
+    return transactions.find((t) => {
+      const isRegFee =
+        t.type === 'registration_fee' ||
+        t.feeCategory === 'registration_fee' ||
+        t.courseTitle?.includes('حقوق التسجيل') ||
+        t.courseTitle?.includes('حقوق المدرسة');
+
+      if (!isRegFee) return false;
+
+      const tName = (t.studentName || '').trim().toLowerCase();
+      const tPhone = (t.studentPhone || '').replace(/[\s-]/g, '');
+      const tNotes = (t.notes || '').replace(/[\s-]/g, '');
+
+      const matchName = cleanName.length >= 3 && (tName.includes(cleanName) || cleanName.includes(tName));
+      const matchPhone =
+        (cleanStdPhone.length >= 8 && (tPhone.includes(cleanStdPhone) || tNotes.includes(cleanStdPhone))) ||
+        (cleanParentPhone.length >= 8 && (tPhone.includes(cleanParentPhone) || tNotes.includes(cleanParentPhone)));
+
+      return matchName || matchPhone;
+    });
+  }, [transactions, stdName, stdPhone, parentPhone]);
 
   const activeCourse = courses.find((c) => c.id === activeCourseId);
 
@@ -69,6 +222,11 @@ export const Courses: React.FC<CoursesProps> = ({
     const teacher = teachers.find((t) => t.id === teacherId) || teachers[0];
     if (!teacher) {
       warning('يرجى إضافة أستاذ واحد على الأقل في صفحة الأساتذة أولاً.');
+      return;
+    }
+
+    if (selectedDays.length === 0) {
+      warning('يرجى اختيار يوم واحد على الأقل من أيام الدراسة الأسبوعية.');
       return;
     }
 
@@ -84,8 +242,8 @@ export const Courses: React.FC<CoursesProps> = ({
       totalSessionsDefault: Number(totalSessionsDefault) || 5,
       enrolledStudents: 0,
       roomName: roomName || (classrooms[0]?.name || 'قاعة تدريس'),
-      scheduleDays: scheduleDays.split('،').map((d) => d.trim()),
-      scheduleTime,
+      scheduleDays: selectedDays,
+      scheduleTime: formattedScheduleTime,
       type: 'group',
       status: 'active',
       enrolledList: [],
@@ -115,7 +273,7 @@ export const Courses: React.FC<CoursesProps> = ({
   const handleEnrollStudent = (e: React.FormEvent) => {
     e.preventDefault();
     const targetCourse = courseForEnroll || activeCourse;
-    if (!targetCourse || !stdName.trim()) return;
+    if (!targetCourse || !stdName.trim() || !parentPhone.trim()) return;
 
     const paidVal = Number(paidAmount) || 0;
     const remainingVal = Math.max(0, targetCourse.monthlyPrice - paidVal);
@@ -128,7 +286,7 @@ export const Courses: React.FC<CoursesProps> = ({
       gender: 'ذكر',
       academicLevel: targetCourse.academicLevel,
       parentName: 'ولي الأمر',
-      parentPhone: parentPhone.trim() || '', // Optional
+      parentPhone: parentPhone.trim(),
       parentRelation: 'أب',
       enrolledCourseTitle: targetCourse.title,
       totalPaid: paidVal,
@@ -313,11 +471,11 @@ export const Courses: React.FC<CoursesProps> = ({
               onChange={(e) => setSubject(e.target.value)}
               required
             />
-            <Input
+            <Select
               label="الطور / المستوى الدراسي"
-              placeholder="مثال: 3 ثانوي (بكالوريا)"
               value={academicLevel}
               onChange={(e) => setAcademicLevel(e.target.value)}
+              options={ACADEMIC_LEVEL_OPTIONS}
               required
             />
           </div>
@@ -374,21 +532,302 @@ export const Courses: React.FC<CoursesProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
-            <Input
-              label="أيام الدراسة"
-              placeholder="السبت، الثلاثاء"
-              value={scheduleDays}
-              onChange={(e) => setScheduleDays(e.target.value)}
-              required
-            />
-            <Input
-              label="التوقيت"
-              placeholder="17:00 - 19:00"
-              value={scheduleTime}
-              onChange={(e) => setScheduleTime(e.target.value)}
-              required
-            />
+          {/* Premium Days of Week Multi-select Checkbox Cards */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                أيام الدراسة الأسبوعية (اختر يوماً أو أكثر) <span style={{ color: 'var(--color-danger)' }}>*</span>
+              </label>
+              {selectedDays.length > 0 && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-primary)', fontWeight: 600 }}>
+                  ({selectedDays.length} أيام مختارة: {selectedDays.join('، ')})
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '6px' }}>
+              {ALL_WEEK_DAYS.map((day) => {
+                const isSelected = selectedDays.includes(day.id);
+                return (
+                  <button
+                    type="button"
+                    key={day.id}
+                    onClick={() => toggleDay(day.id)}
+                    style={{
+                      padding: '8px 4px',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: '0.8125rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      border: isSelected ? '2px solid var(--color-primary)' : '1px solid var(--color-border)',
+                      backgroundColor: isSelected ? 'var(--color-primary-light, rgba(30, 58, 138, 0.08))' : 'var(--color-bg-surface)',
+                      color: isSelected ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      transition: 'all 0.15s ease',
+                      boxShadow: isSelected ? '0 2px 6px rgba(30, 58, 138, 0.12)' : 'none',
+                    }}
+                  >
+                    <span>{day.label}</span>
+                    <span
+                      style={{
+                        width: '16px',
+                        height: '16px',
+                        borderRadius: '50%',
+                        border: isSelected ? 'none' : '1.5px solid var(--color-border)',
+                        backgroundColor: isSelected ? 'var(--color-primary)' : 'transparent',
+                        color: '#FFF',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '10px',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      {isSelected && <Check size={10} strokeWidth={3} />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Quick Presets for Days */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>نماذج سريعة:</span>
+              {PRESET_DAY_COMBOS.map((combo) => (
+                <button
+                  type="button"
+                  key={combo.label}
+                  onClick={() => setSelectedDays(combo.days)}
+                  style={{
+                    fontSize: '0.6875rem',
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px dashed var(--color-border)',
+                    backgroundColor: 'var(--color-bg-surface-secondary)',
+                    color: 'var(--color-text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {combo.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Time Selector with Presets */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                توقيت الحصة (تحديد البداية والنهاية بالعربية) <span style={{ color: 'var(--color-danger)' }}>*</span>
+              </label>
+              <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                نظام 12 ساعة (صباحاً / مساءً)
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Start Time Box */}
+              <div
+                style={{
+                  padding: '12px',
+                  backgroundColor: 'var(--color-bg-app)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8125rem', fontWeight: 700, color: '#16a34a' }}>
+                  <span>توقيت بداية الحصة</span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <Select
+                    label="الساعة"
+                    value={startHour}
+                    onChange={(e) => setStartHour(e.target.value)}
+                    options={HOUR_OPTIONS}
+                  />
+                  <Select
+                    label="الدقيقة"
+                    value={startMinute}
+                    onChange={(e) => setStartMinute(e.target.value)}
+                    options={MINUTE_OPTIONS}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-secondary)', display: 'block', marginBottom: '4px' }}>
+                    الفترة
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setStartPeriod('صباحاً')}
+                      style={{
+                        padding: '6px 10px',
+                        fontSize: '0.8125rem',
+                        fontWeight: 600,
+                        borderRadius: 'var(--radius-sm)',
+                        border: startPeriod === 'صباحاً' ? '1.5px solid #2563eb' : '1px solid var(--color-border)',
+                        backgroundColor: startPeriod === 'صباحاً' ? 'rgba(37, 99, 235, 0.12)' : 'var(--color-bg-surface)',
+                        color: startPeriod === 'صباحاً' ? '#1d4ed8' : 'var(--color-text-primary)',
+                        cursor: 'pointer',
+                        transition: 'all 150ms ease',
+                      }}
+                    >
+                      صباحاً
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStartPeriod('مساءً')}
+                      style={{
+                        padding: '6px 10px',
+                        fontSize: '0.8125rem',
+                        fontWeight: 600,
+                        borderRadius: 'var(--radius-sm)',
+                        border: startPeriod === 'مساءً' ? '1.5px solid #2563eb' : '1px solid var(--color-border)',
+                        backgroundColor: startPeriod === 'مساءً' ? 'rgba(37, 99, 235, 0.12)' : 'var(--color-bg-surface)',
+                        color: startPeriod === 'مساءً' ? '#1d4ed8' : 'var(--color-text-primary)',
+                        cursor: 'pointer',
+                        transition: 'all 150ms ease',
+                      }}
+                    >
+                      مساءً
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* End Time Box */}
+              <div
+                style={{
+                  padding: '12px',
+                  backgroundColor: 'var(--color-bg-app)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8125rem', fontWeight: 700, color: '#2563eb' }}>
+                  <span>توقيت نهاية الحصة</span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <Select
+                    label="الساعة"
+                    value={endHour}
+                    onChange={(e) => setEndHour(e.target.value)}
+                    options={HOUR_OPTIONS}
+                  />
+                  <Select
+                    label="الدقيقة"
+                    value={endMinute}
+                    onChange={(e) => setEndMinute(e.target.value)}
+                    options={MINUTE_OPTIONS}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-secondary)', display: 'block', marginBottom: '4px' }}>
+                    الفترة
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setEndPeriod('صباحاً')}
+                      style={{
+                        padding: '6px 10px',
+                        fontSize: '0.8125rem',
+                        fontWeight: 600,
+                        borderRadius: 'var(--radius-sm)',
+                        border: endPeriod === 'صباحاً' ? '1.5px solid #2563eb' : '1px solid var(--color-border)',
+                        backgroundColor: endPeriod === 'صباحاً' ? 'rgba(37, 99, 235, 0.12)' : 'var(--color-bg-surface)',
+                        color: endPeriod === 'صباحاً' ? '#1d4ed8' : 'var(--color-text-primary)',
+                        cursor: 'pointer',
+                        transition: 'all 150ms ease',
+                      }}
+                    >
+                      صباحاً
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEndPeriod('مساءً')}
+                      style={{
+                        padding: '6px 10px',
+                        fontSize: '0.8125rem',
+                        fontWeight: 600,
+                        borderRadius: 'var(--radius-sm)',
+                        border: endPeriod === 'مساءً' ? '1.5px solid #2563eb' : '1px solid var(--color-border)',
+                        backgroundColor: endPeriod === 'مساءً' ? 'rgba(37, 99, 235, 0.12)' : 'var(--color-bg-surface)',
+                        color: endPeriod === 'مساءً' ? '#1d4ed8' : 'var(--color-text-primary)',
+                        cursor: 'pointer',
+                        transition: 'all 150ms ease',
+                      }}
+                    >
+                      مساءً
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Presets for Times */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>أوقات شائعة جاهزة:</span>
+              {ARABIC_TIME_PRESETS.map((preset) => (
+                <button
+                  type="button"
+                  key={preset.label}
+                  onClick={() => {
+                    setStartHour(preset.startHour);
+                    setStartMinute(preset.startMinute);
+                    setStartPeriod(preset.startPeriod);
+                    setEndHour(preset.endHour);
+                    setEndMinute(preset.endMinute);
+                    setEndPeriod(preset.endPeriod);
+                  }}
+                  style={{
+                    fontSize: '0.6875rem',
+                    padding: '3px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px dashed var(--color-border)',
+                    backgroundColor: 'var(--color-bg-surface-secondary)',
+                    color: 'var(--color-text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Live Preview Banner */}
+            <div
+              style={{
+                fontSize: '0.8125rem',
+                color: 'var(--color-text-primary)',
+                backgroundColor: 'rgba(37, 99, 235, 0.08)',
+                border: '1px solid rgba(37, 99, 235, 0.25)',
+                padding: '8px 12px',
+                borderRadius: 'var(--radius-md)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              <Clock size={16} color="var(--color-primary)" />
+              <span>
+                التوقيت المعتمد للحصة: <strong>من الساعة {startHour}:{startMinute} {startPeriod} إلى الساعة {endHour}:{endMinute} {endPeriod}</strong>
+              </span>
+            </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '8px', marginTop: 'var(--space-2)' }}>
@@ -477,39 +916,74 @@ export const Courses: React.FC<CoursesProps> = ({
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                {activeCourse.enrolledList.map((std) => (
-                  <div
-                    key={std.id}
-                    style={{
-                      padding: 'var(--space-3)',
-                      backgroundColor: 'var(--color-bg-surface)',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: 'var(--radius-md)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 'var(--space-2)',
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
-                        {std.fullName}
+                {activeCourse.enrolledList.map((std) => {
+                  const hasUnpaidDebt = (std.totalDebt || 0) > 0;
+                  return (
+                    <div
+                      key={std.id}
+                      style={{
+                        padding: 'var(--space-3)',
+                        backgroundColor: hasUnpaidDebt ? 'rgba(239, 68, 68, 0.06)' : 'var(--color-bg-surface)',
+                        border: hasUnpaidDebt ? '1.5px solid #ef4444' : '1px solid var(--color-border)',
+                        borderRadius: 'var(--radius-md)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 'var(--space-2)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {hasUnpaidDebt && <AlertTriangle size={15} color="#ef4444" />}
+                        <div>
+                          <div
+                            style={{
+                              fontWeight: 600,
+                              fontSize: '0.875rem',
+                              color: hasUnpaidDebt ? '#b91c1c' : 'var(--color-text-primary)',
+                            }}
+                          >
+                            {std.fullName}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                            هاتف: {std.phone} {std.parentPhone ? `• ولي الأمر: ${std.parentPhone}` : ''}
+                          </div>
+                        </div>
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-                        هاتف: {std.phone} {std.parentPhone ? `• ولي الأمر: ${std.parentPhone}` : ''}
-                      </div>
-                    </div>
 
-                    <div style={{ textAlign: 'left', flexShrink: 0 }}>
-                      <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--color-primary)' }}>
-                        {std.attendedSessions || 0} / {std.totalSessions || 5} حصص
-                      </div>
-                      <div style={{ fontSize: '0.6875rem', color: std.totalDebt > 0 ? 'var(--color-danger)' : 'var(--color-success)', fontWeight: 600 }}>
-                        {std.totalDebt > 0 ? `دين: ${formatDZD(std.totalDebt)}` : 'خالص ✓'}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        <div style={{ textAlign: 'left' }}>
+                          <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--color-primary)' }}>
+                            {std.attendedSessions || 0} / {std.totalSessions || 5} حصص
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '0.6875rem',
+                              color: hasUnpaidDebt ? 'var(--color-danger)' : 'var(--color-success)',
+                              fontWeight: 700,
+                            }}
+                          >
+                            {hasUnpaidDebt ? `غير مسدد (دين: ${formatDZD(std.totalDebt)})` : 'خالص'}
+                          </div>
+                        </div>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            if (window.confirm(`هل أنت متأكد من رغبتك في حذف التلميذ "${std.fullName}" من هذا الفوج واستبعاده من أتعاب ومستحقات الأستاذ؟`)) {
+                              removeStudentFromCourse(activeCourse.id, std.id);
+                              success(`تم حذف التلميذ "${std.fullName}" من الفوج واستبعاده من أتعاب الأستاذ بنجاح.`);
+                            }
+                          }}
+                          style={{ color: 'var(--color-danger)', padding: '6px' }}
+                          title="حذف التلميذ واستبعاده من الفوج ومستحقات الأستاذ"
+                        >
+                          <Trash2 size={15} />
+                        </Button>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -546,13 +1020,85 @@ export const Courses: React.FC<CoursesProps> = ({
               required
             />
             <Input
-              label="هاتف ولي الأمر (اختياري)"
-              placeholder="0661 98 76 54 (اختياري)"
+              label="هاتف ولي الأمر (إجباري)"
+              placeholder="0661 98 76 54"
               value={parentPhone}
               onChange={(e) => setParentPhone(e.target.value)}
-              required={false}
+              required
             />
           </div>
+
+          {/* Annual Registration Fee Alert & Status */}
+          {annualFeePayment ? (
+            <div
+              style={{
+                padding: '10px 14px',
+                backgroundColor: 'rgba(34, 197, 94, 0.08)',
+                border: '1px solid #86efac',
+                borderRadius: 'var(--radius-md)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                fontSize: '0.85rem',
+                color: '#15803d',
+              }}
+            >
+              <CheckCircle2 size={18} style={{ color: '#16a34a', flexShrink: 0 }} />
+              <div>
+                <strong>مسجل في الاشتراك السنوي للمدرسة</strong>
+                <div style={{ fontSize: '0.75rem', color: '#166534', marginTop: '2px' }}>
+                  مسدد بمبلغ {formatDZD(annualFeePayment.amount)} بتاريخ {annualFeePayment.date} (سند رقم: {annualFeePayment.receiptNumber})
+                </div>
+              </div>
+            </div>
+          ) : (stdName.trim().length >= 3 || stdPhone.trim().length >= 8 || parentPhone.trim().length >= 8) ? (
+            <div
+              style={{
+                padding: '10px 14px',
+                backgroundColor: '#fffbeb',
+                border: '1.5px solid #fde68a',
+                borderRadius: 'var(--radius-md)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                fontSize: '0.8125rem',
+                color: '#b45309',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertTriangle size={18} style={{ color: '#d97706', flexShrink: 0 }} />
+                <div>
+                  <strong>تنبيه: التلميذ غير مسجل في الاشتراك السنوي بعد!</strong>
+                  <div style={{ fontSize: '0.75rem', color: '#92400e', marginTop: '2px' }}>
+                    لم يتم العثور على وصل دفع حقوق المدرسة لهذا التلميذ.
+                  </div>
+                </div>
+              </div>
+              {onNavigate && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEnrollModalOpen(false);
+                    onNavigate('payments');
+                  }}
+                  style={{
+                    background: '#fef3c7',
+                    border: '1px solid #f59e0b',
+                    color: '#92400e',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    padding: '6px 10px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  تسجيل الحقوق الآن
+                </button>
+              )}
+            </div>
+          ) : null}
 
           <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
             <Input

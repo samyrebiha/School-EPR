@@ -16,6 +16,7 @@ import { Button } from '../../components/common/Button';
 import { Badge } from '../../components/common/Badge';
 import { formatDZD, formatDateArabic } from '../../utils/formatters';
 import { useSchool } from '../../contexts/SchoolContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useData } from '../../contexts/DataContext';
 
 export interface DashboardProps {
@@ -28,7 +29,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onOpenRecordPayment,
 }) => {
   const { currentSchool } = useSchool();
+  const { isReceptionMode } = useAuth();
   const {
+    teachers,
+    classrooms,
     courses,
     transactions,
     debts,
@@ -42,8 +46,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
     <div>
       {/* Header */}
       <PageHeader
-        title={`لوحة إدارة ${currentSchool.name}`}
-        description="متابعة الدورات والأفواج، تسجيلات التلاميذ، والإيرادات المالية"
+        title={isReceptionMode ? `مكتب الاستقبال — ${currentSchool.name}` : `لوحة إدارة ${currentSchool.name}`}
+        description={
+          isReceptionMode
+            ? "العمليات اليومية الميدانية، إدارة الأفواج، الحضور والغياب، وتسجيل وصولات التلاميذ"
+            : "متابعة الدورات والأفواج، تسجيلات التلاميذ، والإيرادات المالية"
+        }
         actions={
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
             <Button
@@ -76,12 +84,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
           icon={<GraduationCap size={20} />}
         />
 
-        <StatCard
-          title="إجمالي الإيرادات المحصلة"
-          value={formatDZD(totalMonthlyRevenue)}
-          subtitle="سندات مقبوضة"
-          icon={<DollarSign size={20} />}
-        />
+        {isReceptionMode ? (
+          <StatCard
+            title="الأساتذة والمؤطرون"
+            value={`${teachers.length} أستاذ`}
+            subtitle="طاقم التدريس النشط"
+            icon={<Users size={20} color="var(--color-info)" />}
+          />
+        ) : (
+          <StatCard
+            title="إجمالي الإيرادات المحصلة"
+            value={formatDZD(totalMonthlyRevenue)}
+            subtitle="سندات مقبوضة"
+            icon={<DollarSign size={20} />}
+          />
+        )}
 
         <StatCard
           title="الدورات والأفواج الجماعية"
@@ -90,12 +107,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
           icon={<BookOpen size={20} color="var(--color-primary)" />}
         />
 
-        <StatCard
-          title="إجمالي الديون غير المحصلة"
-          value={formatDZD(totalOutstandingDebts)}
-          subtitle={`${debts.length} أقساط متأخرة`}
-          icon={<AlertCircle size={20} color="var(--color-danger)" />}
-        />
+        {isReceptionMode ? (
+          <StatCard
+            title="القاعات والمخابر"
+            value={`${classrooms.length} قاعة`}
+            subtitle="مساحات تدريس مجهزة"
+            icon={<MapPin size={20} color="var(--color-warning)" />}
+          />
+        ) : (
+          <StatCard
+            title="إجمالي الديون غير المحصلة"
+            value={formatDZD(totalOutstandingDebts)}
+            subtitle={`${debts.length} أقساط متأخرة`}
+            icon={<AlertCircle size={20} color="var(--color-danger)" />}
+          />
+        )}
       </div>
 
       {/* Quick Actions & Schedule Row */}
