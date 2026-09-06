@@ -3,8 +3,8 @@
  * Simulates concurrent requests to Supabase database
  */
 
-const SUPABASE_URL = 'https://twegemzosourhldeueqf.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_r4lRcl8qOajlqiH37lRbEA_YcAauEqS';
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || 'https://your-project.supabase.co';
+const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || 'your-anon-key';
 
 const TOTAL_REQUESTS = 200000; // محاكاة 50 مدرسة متزامنة
 const ENDPOINT = `${SUPABASE_URL}/rest/v1/schools?select=id,name,code&limit=10`;
