@@ -3,14 +3,16 @@ import React, { InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttribute
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   hint?: string;
+  helperText?: string;
   error?: string;
   prefixIcon?: React.ReactNode;
   suffixIcon?: React.ReactNode;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, hint, error, prefixIcon, suffixIcon, className = '', id, ...props }, ref) => {
+  ({ label, hint, helperText, error, prefixIcon, suffixIcon, className = '', id, ...props }, ref) => {
     const inputId = id || (label ? `input-${label.replace(/\s+/g, '-').toLowerCase()}` : undefined);
+    const resolvedHint = hint || helperText;
 
     return (
       <div className="form-group">
@@ -32,7 +34,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           {suffixIcon && <span className="form-input-suffix">{suffixIcon}</span>}
         </div>
         {error && <span className="form-error">{error}</span>}
-        {hint && !error && <span className="form-hint">{hint}</span>}
+        {resolvedHint && !error && <span className="form-hint">{resolvedHint}</span>}
       </div>
     );
   }

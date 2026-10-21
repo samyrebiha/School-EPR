@@ -10,6 +10,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   isLoading?: boolean;
   leftIcon?: React.ReactNode;
   rightIcon?: React.ReactNode;
+  icon?: React.ReactNode;
   isIconOnly?: boolean;
 }
 
@@ -20,11 +21,13 @@ export const Button: React.FC<ButtonProps> = ({
   isLoading = false,
   leftIcon,
   rightIcon,
+  icon,
   isIconOnly = false,
   className = '',
   disabled,
   ...props
 }) => {
+  const effectiveLeftIcon = leftIcon || icon;
   const sizeClass = size === 'sm' ? 'btn-sm' : size === 'lg' ? 'btn-lg' : '';
   const variantClass = variant === 'outline' ? 'btn-secondary' : `btn-${variant}`;
   const iconOnlyClass = isIconOnly ? 'btn-icon' : '';
@@ -39,7 +42,7 @@ export const Button: React.FC<ButtonProps> = ({
         <Loader2 className="animate-spin" size={size === 'sm' ? 14 : 18} />
       ) : (
         <>
-          {leftIcon && <span className="btn-icon-wrapper">{leftIcon}</span>}
+          {effectiveLeftIcon && <span className="btn-icon-wrapper">{effectiveLeftIcon}</span>}
           {children}
           {rightIcon && <span className="btn-icon-wrapper">{rightIcon}</span>}
         </>

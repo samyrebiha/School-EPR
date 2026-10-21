@@ -5,13 +5,17 @@ import {
   Shield,
   Save,
   CheckCircle,
+  Type,
+  Check,
 } from 'lucide-react';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { Input, Textarea } from '../../components/common/Input';
 import { useSchool } from '../../contexts/SchoolContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { useTypography } from '../../contexts/TypographyContext';
 import { formatDateArabic } from '../../utils/formatters';
 
 export interface SettingsProps {
@@ -20,9 +24,22 @@ export interface SettingsProps {
 
 export const Settings: React.FC<SettingsProps> = () => {
   const { currentSchool, updateSchoolProfile } = useSchool();
+  const { isReceptionMode } = useAuth();
   const { success } = useToast();
+  const {
+    currentFontId,
+    currentFontSizeId,
+    currentFont,
+    currentFontSize,
+    changeFont,
+    changeFontSize,
+    availableFonts,
+    availableFontSizes,
+  } = useTypography();
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'finance' | 'security'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'finance' | 'typography' | 'security'>(
+    isReceptionMode ? 'typography' : 'profile'
+  );
 
   // School Form State
   const [name, setName] = useState(currentSchool.name);
@@ -113,6 +130,24 @@ export const Settings: React.FC<SettingsProps> = () => {
         >
           <CreditCard size={16} />
           <span>طرق الدفع والإيصالات</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('typography')}
+          style={{
+            padding: '10px 16px',
+            fontSize: '0.875rem',
+            fontWeight: activeTab === 'typography' ? 600 : 500,
+            color: activeTab === 'typography' ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+            borderBottom: activeTab === 'typography' ? '2px solid var(--color-primary)' : '2px solid transparent',
+            marginBottom: '-1px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <Type size={16} />
+          <span>الخط والمظهر</span>
         </button>
 
         <button
@@ -244,6 +279,237 @@ export const Settings: React.FC<SettingsProps> = () => {
             </Button>
           </form>
         </Card>
+      )}
+
+      {/* Tab: Typography & Appearance */}
+      {activeTab === 'typography' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)', maxWidth: '840px' }}>
+          <Card
+            title="إعدادات الخط"
+            description="تخصيص نوع الخط وحجمه في كافة واجهات المنصة"
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+              
+              {/* Section 1: Font Selection */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--color-text-primary)', marginBottom: '10px' }}>
+                  نوع الخط
+                </label>
+                
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gap: '12px',
+                  }}
+                  className="sm:grid-cols-1"
+                >
+                  {availableFonts.map((f) => {
+                    const isSelected = currentFontId === f.id;
+                    return (
+                      <div
+                        key={f.id}
+                        onClick={() => changeFont(f.id)}
+                        style={{
+                          padding: '14px 16px',
+                          borderRadius: 'var(--radius-md)',
+                          border: isSelected ? '2px solid var(--color-primary)' : '1px solid var(--color-border)',
+                          backgroundColor: isSelected ? 'var(--color-primary-light, rgba(23, 107, 103, 0.08))' : 'var(--color-bg-surface)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontWeight: 700, fontSize: '0.9375rem', color: isSelected ? 'var(--color-primary)' : 'var(--color-text-primary)' }}>
+                            {f.name}
+                          </span>
+                          {isSelected ? (
+                            <span
+                              style={{
+                                width: '20px',
+                                height: '20px',
+                                borderRadius: '50%',
+                                backgroundColor: 'var(--color-primary)',
+                                color: '#ffffff',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              <Check size={12} strokeWidth={3} />
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                width: '20px',
+                                height: '20px',
+                                borderRadius: '50%',
+                                border: '1.5px solid var(--color-border)',
+                              }}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          style={{
+                            fontFamily: f.fontFamily,
+                            fontSize: '0.9375rem',
+                            fontWeight: 600,
+                            color: isSelected ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                            lineHeight: 1.5,
+                            marginTop: '2px',
+                          }}
+                        >
+                          {f.sampleText}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Section 2: Font Size Selection */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--color-text-primary)', marginBottom: '10px' }}>
+                  حجم الخط
+                </label>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(5, 1fr)',
+                    gap: '10px',
+                  }}
+                  className="sm:grid-cols-2"
+                >
+                  {availableFontSizes.map((s) => {
+                    const isSelected = currentFontSizeId === s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => changeFontSize(s.id)}
+                        style={{
+                          padding: '12px 8px',
+                          borderRadius: 'var(--radius-md)',
+                          border: isSelected ? '2px solid var(--color-primary)' : '1px solid var(--color-border)',
+                          backgroundColor: isSelected ? 'var(--color-primary-light, rgba(23, 107, 103, 0.08))' : 'var(--color-bg-surface)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '4px',
+                          transition: 'all 0.15s ease',
+                          textAlign: 'center',
+                        }}
+                      >
+                        <span style={{ fontSize: '0.875rem', fontWeight: 700, color: isSelected ? 'var(--color-primary)' : 'var(--color-text-primary)' }}>
+                          {s.label}
+                        </span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                          {s.sizePx}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Section 3: Live Preview */}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 700, color: 'var(--color-text-primary)', marginBottom: '10px' }}>
+                  معاينة مباشرة
+                </label>
+
+                <div
+                  style={{
+                    padding: '16px 18px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    backgroundColor: 'var(--color-bg-surface-secondary)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                        مؤسسة {currentSchool.name}
+                      </h4>
+                      <p style={{ margin: '3px 0 0 0', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
+                        فوج الرياضيات — الأستاذ سليم بوقرة
+                      </p>
+                    </div>
+
+                    <span
+                      style={{
+                        padding: '3px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'var(--color-bg-surface)',
+                        border: '1px solid var(--color-border)',
+                        color: 'var(--color-text-primary)',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {currentFont.name} • {currentFontSize.label}
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 1fr)',
+                      gap: '10px',
+                    }}
+                    className="sm:grid-cols-1"
+                  >
+                    <div style={{ padding: '10px 12px', backgroundColor: '#ffffff', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>عدد التلاميذ</div>
+                      <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-text-primary)', marginTop: '2px' }}>24 تلميذ</div>
+                    </div>
+                    <div style={{ padding: '10px 12px', backgroundColor: '#ffffff', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>الاشتراك الشهري</div>
+                      <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-primary)', marginTop: '2px' }}>2,000 دج</div>
+                    </div>
+                    <div style={{ padding: '10px 12px', backgroundColor: '#ffffff', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>التوقيت</div>
+                      <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--color-text-primary)', marginTop: '4px' }}>السبت والثلاثاء (05:00 مساءً)</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    success('تم حفظ إعدادات الخط بنجاح', 'تم الحفظ');
+                  }}
+                >
+                  حفظ الإعدادات
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    changeFont('cairo');
+                    changeFontSize('md');
+                    success('تمت استعادة خط Cairo القياسي', 'إعادة التعيين');
+                  }}
+                >
+                  استعادة الافتراضي (Cairo)
+                </Button>
+              </div>
+
+            </div>
+          </Card>
+        </div>
       )}
 
       {activeTab === 'security' && (

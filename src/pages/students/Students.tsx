@@ -11,6 +11,8 @@ import {
   Filter,
   BadgeCheck,
   CreditCard,
+  Edit2,
+  HeartHandshake,
 } from 'lucide-react';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { DataTable, Column } from '../../components/data-table/DataTable';
@@ -18,12 +20,15 @@ import { Card, StatCard } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { Badge } from '../../components/common/Badge';
 import { Select, Input } from '../../components/common/Input';
+import { Modal } from '../../components/common/Modal';
 import { Student, Course, PaymentTransaction } from '../../types';
 import { formatAlgerianPhone, formatDZD, formatDateArabic } from '../../utils/formatters';
+import { useToast } from '../../contexts/ToastContext';
 import { useData } from '../../contexts/DataContext';
 
 export interface AggregatedStudent {
   keyId: string;
+  cardId?: string;
   fullName: string;
   phone: string;
   parentPhone: string;
@@ -34,16 +39,70 @@ export interface AggregatedStudent {
   annualFeeDate?: string;
   totalPaidAmount: number;
   totalDebtAmount: number;
+  isExempt?: boolean;
   status: 'active' | 'inactive';
   registrationDate: string;
 }
 
 export const Students: React.FC = () => {
-  const { courses, transactions } = useData();
+  const { success } = useToast();
+  const { courses, transactions, updateStudent } = useData();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [feeStatusFilter, setFeeStatusFilter] = useState<'all' | 'paid' | 'unpaid'>('all');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState<string>('all');
+
+  // Edit Student State
+  const [studentToEdit, setStudentToEdit] = useState<AggregatedStudent | null>(null);
+  const [editFullName, setEditFullName] = useState('');
+  const [editCardId, setEditCardId] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editParentPhone, setEditParentPhone] = useState('');
+  const [editIsExempt, setEditIsExempt] = useState(false);
+
+  const handleOpenEditStudent = (student: AggregatedStudent) => {
+    setStudentToEdit(student);
+    setEditFullName(student.fullName);
+    setEditCardId(student.cardId || '');
+    setEditPhone(student.phone || '');
+    setEditParentPhone(student.parentPhone || '');
+    setEditIsExempt(!!student.isExempt);
+  };
+
+  const handleSaveEditStudent = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!studentToEdit || !editFullName.trim()) return;
+
+    // Find the real student instance from courses
+    const targetCourse = courses.find((c) => c.enrolledList?.some((std) => std.id === studentToEdit.keyId));
+    const originalStudent = targetCourse?.enrolledList?.find((std) => std.id === studentToEdit.keyId);
+
+    const updated: Student = {
+      id: studentToEdit.keyId,
+      fullName: editFullName.trim(),
+      cardId: editCardId.trim() || undefined,
+      phone: editPhone.trim(),
+      parentPhone: editParentPhone.trim(),
+      parentName: originalStudent?.parentName || 'ولي الأمر',
+      parentRelation: originalStudent?.parentRelation || 'أب',
+      gender: originalStudent?.gender || 'ذكر',
+      academicLevel: originalStudent?.academicLevel || studentToEdit.academicLevel || '',
+      totalPaid: originalStudent?.totalPaid || studentToEdit.totalPaidAmount || 0,
+      totalDebt: editIsExempt ? 0 : (originalStudent?.totalDebt || studentToEdit.totalDebtAmount || 0),
+      isExempt: editIsExempt,
+      exemptionReason: editIsExempt ? 'معفى من تسديد مبلغ الدورة' : undefined,
+      totalSessions: originalStudent?.totalSessions || 5,
+      attendedSessions: originalStudent?.attendedSessions || 0,
+      status: originalStudent?.status || 'active',
+      registrationDate: originalStudent?.registrationDate || studentToEdit.registrationDate || new Date().toISOString().split('T')[0],
+      attendanceLogs: originalStudent?.attendanceLogs || [],
+      notes: originalStudent?.notes || '',
+    };
+
+    updateStudent(targetCourse ? targetCourse.id : '', updated);
+    setStudentToEdit(null);
+    success(`تم تعديل بيانات التلميذ "${updated.fullName}" بنجاح!`, 'تم الحفظ');
+  };
 
   // Find all transactions that correspond to annual registration fees
   const regFeeTransactions = useMemo(() => {
@@ -51,7 +110,8 @@ export const Students: React.FC = () => {
       (t) =>
         t.courseTitle?.includes('حقوق التسجيل') ||
         t.courseTitle?.includes('حقوق المدرسة') ||
-        (t as any).feeCategory === 'registration_fee'
+        t.type === 'registration_fee' ||
+        t.feeCategory === 'registration_fee'
     );
   }, [transactions]);
 
@@ -70,6 +130,7 @@ export const Students: React.FC = () => {
         if (!studentMap.has(key)) {
           studentMap.set(key, {
             keyId: std.id,
+            cardId: std.cardId || undefined,
             fullName: std.fullName.trim(),
             phone: std.phone || '',
             parentPhone: std.parentPhone || '',
@@ -78,6 +139,7 @@ export const Students: React.FC = () => {
             hasPaidAnnualFee: false,
             totalPaidAmount: 0,
             totalDebtAmount: 0,
+            isExempt: !!std.isExempt,
             status: 'active',
             registrationDate: std.registrationDate || new Date().toISOString().split('T')[0],
           });
@@ -190,11 +252,30 @@ export const Students: React.FC = () => {
           </div>
           <div>
             <div style={{ fontWeight: 700, color: 'var(--color-text-primary)' }}>{s.fullName}</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', flexWrap: 'wrap' }}>
               <Phone size={11} />
               <span>{formatAlgerianPhone(s.phone || s.parentPhone || '0550 00 00 00')}</span>
               <span>•</span>
               <span>{s.academicLevel}</span>
+              {s.cardId && (
+                <>
+                  <span>•</span>
+                  <span
+                    style={{
+                      color: 'var(--color-primary, #2563eb)',
+                      fontWeight: 700,
+                      fontFamily: 'monospace',
+                      backgroundColor: 'rgba(37, 99, 235, 0.08)',
+                      padding: '1px 5px',
+                      borderRadius: '4px',
+                      fontSize: '0.6875rem',
+                    }}
+                    title="رمز البطاقة الذكية RFID"
+                  >
+                    💳 {s.cardId}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -306,6 +387,27 @@ export const Students: React.FC = () => {
       key: 'totalDebtAmount',
       header: 'الحالة المالية',
       render: (s) => {
+        if (s.isExempt) {
+          return (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '3px 8px',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: '#fef3c7',
+                color: '#92400e',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                border: '1px solid #f59e0b',
+              }}
+            >
+              <HeartHandshake size={13} />
+              معفى
+            </span>
+          );
+        }
         if (s.totalDebtAmount > 0) {
           return (
             <div>
@@ -321,6 +423,25 @@ export const Students: React.FC = () => {
           </span>
         );
       },
+    },
+    {
+      key: 'actions' as any,
+      header: 'الإجراءات',
+      width: '90px',
+      render: (s) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Button
+            variant="ghost"
+            size="sm"
+            isIconOnly
+            title="تعديل بيانات التلميذ"
+            onClick={() => handleOpenEditStudent(s)}
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            <Edit2 size={16} />
+          </Button>
+        </div>
+      ),
     },
   ];
 
@@ -403,6 +524,88 @@ export const Students: React.FC = () => {
         searchPlaceholder="تصفية سريعة داخل الجدول..."
         searchFields={['fullName', 'phone', 'parentPhone', 'academicLevel']}
       />
+
+      {/* Edit Student Modal */}
+      <Modal
+        isOpen={!!studentToEdit}
+        onClose={() => setStudentToEdit(null)}
+        title={`تعديل بيانات التلميذ: ${studentToEdit?.fullName || ''}`}
+        description="تحديث الاسم وبيانات الاتصال للتلميذ"
+        maxWidth="500px"
+      >
+        <form onSubmit={handleSaveEditStudent} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          <Input
+            label="اسم التلميذ الكامل"
+            value={editFullName}
+            onChange={(e) => setEditFullName(e.target.value)}
+            required
+            autoFocus
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
+            <Input
+              label="رقم الهاتف"
+              value={editPhone}
+              onChange={(e) => setEditPhone(e.target.value)}
+              placeholder="0550 00 00 00"
+            />
+            <Input
+              label="هاتف ولي الأمر"
+              value={editParentPhone}
+              onChange={(e) => setEditParentPhone(e.target.value)}
+              placeholder="0661 00 00 00"
+            />
+          </div>
+
+          <Input
+            label="رقم البطاقة الإلكترونية الذكية (RFID / Barcode)"
+            placeholder="امسح البطاقة بالقارئ أو اكتب الكود..."
+            value={editCardId}
+            onChange={(e) => setEditCardId(e.target.value)}
+            prefixIcon={<CreditCard size={15} color="var(--color-primary, #2563eb)" />}
+            hint="مرّر بطاقة الـ RFID على القارئ لربط التلميذ بها فوراً"
+          />
+
+          {/* Social Exemption Option (معفى للفئة الفقيرة) */}
+          <div
+            style={{
+              padding: '10px 14px',
+              backgroundColor: editIsExempt ? '#fffbeb' : 'var(--color-bg-app)',
+              border: editIsExempt ? '1.5px solid #f59e0b' : '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              cursor: 'pointer',
+            }}
+            onClick={() => setEditIsExempt(!editIsExempt)}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <input
+                type="checkbox"
+                id="editStudentIsExempt"
+                checked={editIsExempt}
+                onChange={(e) => setEditIsExempt(e.target.checked)}
+                style={{ width: '18px', height: '18px', accentColor: '#d97706', cursor: 'pointer' }}
+              />
+              <label htmlFor="editStudentIsExempt" style={{ cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600, color: editIsExempt ? '#92400e' : 'var(--color-text-primary)' }}>
+                معفى من تسديد مبلغ الدورة
+              </label>
+            </div>
+            <HeartHandshake size={20} color={editIsExempt ? '#d97706' : 'var(--color-text-muted)'} />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '8px', marginTop: 'var(--space-2)' }}>
+            <Button type="submit" variant="primary">
+              حفظ التعديلات
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => setStudentToEdit(null)}>
+              إلغاء
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };

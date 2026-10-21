@@ -29,7 +29,7 @@ export const Payments: React.FC<PaymentsProps> = ({
   isRecordModalOpenInitially = false,
   onCloseRecordModalInitially,
 }) => {
-  const { success } = useToast();
+  const { success, warning } = useToast();
   const { isReceptionMode } = useAuth();
   const {
     transactions,
@@ -105,6 +105,7 @@ export const Payments: React.FC<PaymentsProps> = ({
   const [amount, setAmount] = useState(String(courses[0]?.monthlyPrice || 6000));
   const [notes, setNotes] = useState('');
   const [targetedDebtStudentId, setTargetedDebtStudentId] = useState<string | undefined>(undefined);
+  const [targetedDebtId, setTargetedDebtId] = useState<string | undefined>(undefined);
   const [selectedStudentId, setSelectedStudentId] = useState('');
 
   // Period filtering logic
@@ -179,13 +180,25 @@ export const Payments: React.FC<PaymentsProps> = ({
     e.preventDefault();
     if (!studentName.trim() || !amount) return;
 
+    const numAmt = Number(amount) || 0;
+    const foundCourse = courses.find((c) => c.title === courseTitle);
+    const maxCoursePrice = foundCourse?.monthlyPrice || 0;
+
+    if (maxCoursePrice > 0 && numAmt > maxCoursePrice) {
+      warning(
+        `المبلغ المسدد (${formatDZD(numAmt)}) لا يمكن أن يتجاوز مبلغ الدورة (${formatDZD(maxCoursePrice)}) كحد أقصى لتجنب الأخطاء.`,
+        'تجاوز مبلغ الدورة'
+      );
+      return;
+    }
+
     const newTx: PaymentTransaction = {
       id: `tx-${Date.now()}`,
       receiptNumber: `REC-2026-${Math.floor(1000 + Math.random() * 9000)}`,
       studentId: targetedDebtStudentId || `std-${Date.now()}`,
       studentName: studentName.trim(),
       courseTitle,
-      amount: Number(amount) || 5000,
+      amount: numAmt || 5000,
       paymentMethod: 'cash', // Only Cash
       date: new Date().toISOString().split('T')[0],
       status: 'completed',
@@ -193,15 +206,36 @@ export const Payments: React.FC<PaymentsProps> = ({
       notes,
     };
 
-    recordPayment(newTx, targetedDebtStudentId);
+    let debtRemainingNotice: string | undefined;
+    if (targetedDebtStudentId) {
+      const allStds = courses.flatMap((c) => c.enrolledList || []);
+      const matched = allStds.find((s) => s.id === targetedDebtStudentId);
+      if (matched && matched.totalDebt) {
+        const remaining = Math.max(0, matched.totalDebt - numAmt);
+        if (remaining > 0) {
+          debtRemainingNotice = `متبقي في الذمة: ${formatDZD(remaining)}`;
+        } else {
+          debtRemainingNotice = 'تم تسديد كامل الدين وتصفية الحساب كـ خالص!';
+        }
+      }
+    }
+
+    recordPayment(newTx, targetedDebtStudentId, targetedDebtId);
     setIsRecordModalOpen(false);
     if (onCloseRecordModalInitially) onCloseRecordModalInitially();
-    success(`تم تسجيل عملية الدفع نقداً بنجاح وتسجيل السند ${newTx.receiptNumber}`, 'تمت العملية');
+
+    success(
+      debtRemainingNotice
+        ? `تم تسجيل عملية الدفع نقداً بنجاح (${newTx.receiptNumber}). ${debtRemainingNotice}`
+        : `تم تسجيل عملية الدفع نقداً بنجاح وتسجيل السند ${newTx.receiptNumber}`,
+      'تمت العملية'
+    );
 
     setStudentName('');
     setNotes('');
     setSelectedStudentId('');
     setTargetedDebtStudentId(undefined);
+    setTargetedDebtId(undefined);
   };
 
   const handleRecordRegistrationFee = (e: React.FormEvent) => {
@@ -265,43 +299,109 @@ export const Payments: React.FC<PaymentsProps> = ({
         <style>
           @page {
             size: 80mm auto;
-            margin: 4mm;
+            margin: 0 !important;
+          }
+          * {
+            box-sizing: border-box;
+            color: #000000 !important;
+            border-color: #000000 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            direction: rtl;
+            background: #ffffff !important;
+            color: #000000 !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
           }
           body {
-            font-family: 'Courier New', Courier, monospace, 'Cairo', Tahoma, sans-serif;
-            margin: 0;
-            padding: 8px;
-            color: #000;
-            background: #fff;
-            direction: rtl;
-            font-size: 13px;
-            line-height: 1.4;
+            font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+            margin: 0 auto !important;
+            padding: 2mm 3mm 1mm 3mm !important;
+            width: 100%;
+            max-width: 72mm;
+            font-size: 12px;
+            line-height: 1.35;
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
           }
           .center { text-align: center; }
-          .bold { font-weight: bold; }
-          .divider { border-top: 1px dashed #000; margin: 6px 0; }
-          .double-divider { border-top: 2px solid #000; margin: 6px 0; }
-          .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 12px; }
-          .total-box {
-            font-size: 16px;
-            font-weight: 900;
-            text-align: center;
-            padding: 8px 0;
-            margin: 8px 0;
-            border-top: 2px dashed #000;
-            border-bottom: 2px dashed #000;
+          .bold { font-weight: 800; }
+          .divider { border-top: 1.5px dashed #000000; margin: 4px 0; width: 100%; }
+          .double-divider { border-top: 2.5px solid #000000; margin: 5px 0; width: 100%; }
+          .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 6px;
+            margin: 3px 0;
+            font-size: 12px;
+            width: 100%;
+            box-sizing: border-box;
           }
-          @media print { body { padding: 0; } }
+          .row > span:first-child {
+            flex-shrink: 0;
+            color: #000000 !important;
+            font-weight: 700;
+            white-space: nowrap;
+          }
+          .row > span:last-child {
+            flex: 1;
+            min-width: 0;
+            max-width: 72%;
+            text-align: left;
+            font-weight: 800;
+            color: #000000 !important;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+          }
+          .total-box {
+            font-size: 14px;
+            font-weight: 900;
+            color: #000000 !important;
+            text-align: center;
+            padding: 5px 0;
+            margin: 5px 0;
+            border-top: 1.5px dashed #000000;
+            border-bottom: 1.5px dashed #000000;
+          }
+          @media print {
+            @page {
+              size: 80mm auto;
+              margin: 0 !important;
+            }
+            html, body {
+              width: 100% !important;
+              max-width: 72mm !important;
+              height: auto !important;
+              min-height: 0 !important;
+              max-height: none !important;
+              margin: 0 auto !important;
+              padding: 2mm 3mm 0mm 3mm !important;
+              box-sizing: border-box !important;
+              overflow: hidden !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            .sig-row {
+              margin-bottom: 0 !important;
+              padding-bottom: 0 !important;
+            }
+          }
         </style>
       </head>
       <body>
-        <div class="center bold" style="font-size: 15px;">${schoolName}</div>
-        <div class="center" style="font-size: 11px; margin-top: 2px;">وصل حقوق التسجيل السنوية</div>
+        <div class="center" style="font-size: 15px; font-weight: 900; color: #000000;">${schoolName}</div>
+        <div class="center" style="font-size: 12px; font-weight: 800; margin-top: 2px; color: #000000;">وصل حقوق التسجيل السنوية</div>
         <div class="double-divider"></div>
 
         <div class="row">
           <span>رقم السند:</span>
-          <span class="bold">${tx.receiptNumber}</span>
+          <span>${tx.receiptNumber}</span>
         </div>
         <div class="row">
           <span>التاريخ:</span>
@@ -309,7 +409,7 @@ export const Payments: React.FC<PaymentsProps> = ({
         </div>
         <div class="row">
           <span>اسم التلميذ:</span>
-          <span class="bold" style="font-size: 13px;">${tx.studentName}</span>
+          <span style="font-size: 12.5px;">${tx.studentName}</span>
         </div>
         ${phone ? `
         <div class="row">
@@ -318,7 +418,7 @@ export const Payments: React.FC<PaymentsProps> = ({
         </div>` : ''}
         <div class="row">
           <span>الموسم الدراسي:</span>
-          <span class="bold">${seasonDisplay}</span>
+          <span>${seasonDisplay}</span>
         </div>
         <div class="row">
           <span>طريقة الدفع:</span>
@@ -326,15 +426,15 @@ export const Payments: React.FC<PaymentsProps> = ({
         </div>
 
         <div class="total-box">
-          المبلغ: ${(tx.amount || 500).toLocaleString('fr-DZ')} دج
+          المبلغ المسدد: ${(tx.amount || 500).toLocaleString('fr-DZ')} دج
         </div>
 
-        <div class="center" style="font-size: 11px; color: #222; margin-top: 4px;">
+        <div class="center" style="font-size: 11px; font-weight: 700; color: #000000; margin-top: 4px;">
           هذا السند يثبت تسديد حقوق المدرسة لكامل الموسم.
         </div>
         <div class="divider"></div>
 
-        <div style="margin-top: 16px; display: flex; justify-content: space-between; font-size: 11px;">
+        <div class="sig-row" style="margin-top: 8px; margin-bottom: 0; display: flex; justify-content: space-between; font-size: 11px; font-weight: 700;">
           <span>ختم وتوقيع الاستقبال</span>
           <span>....................</span>
         </div>
@@ -455,49 +555,117 @@ export const Payments: React.FC<PaymentsProps> = ({
         <style>
           @page {
             size: 80mm auto;
-            margin: 4mm;
+            margin: 0 !important;
+          }
+          * {
+            box-sizing: border-box;
+            color: #000000 !important;
+            border-color: #000000 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            direction: rtl;
+            background: #ffffff !important;
+            color: #000000 !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
           }
           body {
-            font-family: 'Courier New', Courier, monospace, 'Segoe UI', Tahoma, sans-serif;
-            margin: 0;
-            padding: 8px;
-            color: #000;
-            background: #fff;
-            direction: rtl;
+            font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+            margin: 0 auto !important;
+            padding: 2mm 3mm 1mm 3mm !important;
+            width: 100%;
+            max-width: 72mm;
             font-size: 12px;
-            line-height: 1.4;
+            line-height: 1.35;
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
           }
           .center { text-align: center; }
-          .bold { font-weight: bold; }
-          .divider { border-top: 1px dashed #000; margin: 6px 0; }
-          .double-divider { border-top: 2px solid #000; margin: 6px 0; }
-          .row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-          .total-box {
-            font-size: 15px;
+          .bold { font-weight: 800; }
+          .divider { border-top: 1.5px dashed #000000; margin: 4px 0; width: 100%; }
+          .double-divider { border-top: 2.5px solid #000000; margin: 5px 0; width: 100%; }
+          .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 6px;
+            margin-bottom: 3px;
+            font-size: 12px;
+            width: 100%;
+            box-sizing: border-box;
+          }
+          .row > span:first-child {
+            flex-shrink: 0;
+            color: #000000 !important;
+            font-weight: 700;
+            white-space: nowrap;
+          }
+          .row > span:last-child {
+            flex: 1;
+            min-width: 0;
+            max-width: 72%;
+            text-align: left;
             font-weight: 800;
+            color: #000000 !important;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+          }
+          .total-box {
+            font-size: 14px;
+            font-weight: 900;
+            color: #000000 !important;
             text-align: center;
-            padding: 6px 0;
-            margin: 6px 0;
-            border-top: 1px dashed #000;
-            border-bottom: 1px dashed #000;
+            padding: 5px 0;
+            margin: 5px 0;
+            border-top: 1.5px dashed #000000;
+            border-bottom: 1.5px dashed #000000;
           }
           .sig-section {
-            margin-top: 18px;
+            margin-top: 10px;
             display: flex;
             justify-content: space-between;
             font-size: 11px;
+            font-weight: 700;
+            color: #000000 !important;
           }
-          @media print { body { padding: 0; } }
+          @media print {
+            @page {
+              size: 80mm auto;
+              margin: 0 !important;
+            }
+            html, body {
+              width: 100% !important;
+              max-width: 72mm !important;
+              height: auto !important;
+              min-height: 0 !important;
+              max-height: none !important;
+              margin: 0 auto !important;
+              padding: 2mm 3mm 0mm 3mm !important;
+              box-sizing: border-box !important;
+              overflow: hidden !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            .footer-tag {
+              margin-bottom: 0 !important;
+              padding-bottom: 0 !important;
+            }
+          }
         </style>
       </head>
       <body>
-        <div class="center bold" style="font-size: 14px;">${schoolName}</div>
-        <div class="center" style="font-size: 12px; margin-top: 2px;">سند صرف نفقات / وصل استلام أجرة</div>
+        <div class="center" style="font-size: 15px; font-weight: 900; color: #000000;">${schoolName}</div>
+        <div class="center" style="font-size: 12px; font-weight: 800; margin-top: 2px; color: #000000;">سند صرف نفقات / وصل استلام أجرة</div>
         <div class="double-divider"></div>
 
         <div class="row">
           <span>رقم السند:</span>
-          <span class="bold">${expense.receiptNumber}</span>
+          <span>${expense.receiptNumber}</span>
         </div>
         <div class="row">
           <span>التاريخ والوقت:</span>
@@ -512,19 +680,19 @@ export const Payments: React.FC<PaymentsProps> = ({
 
         <div class="row">
           <span>البيان:</span>
-          <span class="bold">${expense.title}</span>
+          <span>${expense.title}</span>
         </div>
         ${expense.recipientName ? `
         <div class="row">
           <span>المستلم (العامل/الجهة):</span>
-          <span class="bold">${expense.recipientName}</span>
+          <span>${expense.recipientName}</span>
         </div>` : ''}
         <div class="row">
           <span>طريقة الصرف:</span>
           <span>${expense.paymentMethod || 'نقداً'}</span>
         </div>
         ${expense.notes ? `
-        <div class="row" style="font-size: 11px; color: #444;">
+        <div class="row" style="font-size: 11px;">
           <span>ملاحظة:</span>
           <span>${expense.notes}</span>
         </div>` : ''}
@@ -536,15 +704,15 @@ export const Payments: React.FC<PaymentsProps> = ({
         <div class="sig-section">
           <div>
             توقيع الإدارة / الصندوق:
-            <div style="height: 35px;"></div>
+            <div style="height: 25px;"></div>
           </div>
           <div style="text-align: left;">
             توقيع واستلام العامل:
-            <div style="height: 35px;"></div>
+            <div style="height: 25px;"></div>
           </div>
         </div>
 
-        <div class="center" style="font-size: 10px; margin-top: 10px; color: #555;">
+        <div class="center footer-tag" style="font-size: 10px; font-weight: 700; margin-top: 6px; margin-bottom: 0; color: #000000;">
           وصل رسمي معتمد - طابعة حرارية 80mm
         </div>
 
@@ -565,9 +733,28 @@ export const Payments: React.FC<PaymentsProps> = ({
       header: 'رقم الإيصال',
       sortable: true,
       render: (tx) => (
-        <span style={{ fontWeight: 700, color: 'var(--color-primary)', fontFamily: 'monospace' }}>
-          {tx.receiptNumber}
-        </span>
+        <div>
+          <span style={{ fontWeight: 700, color: 'var(--color-primary)', fontFamily: 'monospace' }}>
+            {tx.receiptNumber}
+          </span>
+          {(tx.notes?.includes('حصة واحدة') || tx.receiptNumber?.startsWith('REC-SS')) && (
+            <div style={{ marginTop: '2px' }}>
+              <span
+                style={{
+                  fontSize: '0.6875rem',
+                  padding: '1px 6px',
+                  borderRadius: '4px',
+                  backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                  color: '#2563eb',
+                  fontWeight: 700,
+                  display: 'inline-block',
+                }}
+              >
+                حصة واحدة
+              </span>
+            </div>
+          )}
+        </div>
       ),
     },
     {
@@ -578,6 +765,24 @@ export const Payments: React.FC<PaymentsProps> = ({
         <div>
           <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{tx.studentName}</div>
           <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{tx.courseTitle}</div>
+          {tx.notes && (
+            <div
+              style={{
+                fontSize: '0.725rem',
+                color: tx.notes.includes('حصة واحدة') ? '#1d4ed8' : 'var(--color-text-muted)',
+                marginTop: '3px',
+                fontWeight: tx.notes.includes('حصة واحدة') ? 600 : 400,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              {tx.notes.includes('حصة واحدة') && (
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#2563eb', flexShrink: 0 }} />
+              )}
+              <span>{tx.notes}</span>
+            </div>
+          )}
         </div>
       ),
     },
@@ -816,6 +1021,7 @@ export const Payments: React.FC<PaymentsProps> = ({
                   setCourseTitle(d.courseTitle);
                   setAmount(String(d.remainingAmount));
                   setTargetedDebtStudentId(d.studentId);
+                  setTargetedDebtId(d.id);
                   setIsRecordModalOpen(true);
                 }}
               >
@@ -1461,37 +1667,53 @@ export const Payments: React.FC<PaymentsProps> = ({
             required
           />
 
-          <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
-            <Input
-              label="المبلغ المسدد نقداً (دج DZD)"
-              type="number"
-              placeholder="مثال: 6000"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              required
-            />
-            <div className="form-group">
-              <label className="form-label">طريقة الدفع</label>
-              <div
-                style={{
-                  height: 'var(--height-input)',
-                  minHeight: 'var(--height-input)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '0 var(--space-3)',
-                  backgroundColor: 'var(--color-bg-surface-secondary)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  fontSize: '0.875rem',
-                  fontWeight: 600,
-                  color: 'var(--color-primary)',
-                  boxSizing: 'border-box',
-                }}
-              >
-                نقداً (Cash)
+          {(() => {
+            const foundCourse = courses.find((c) => c.title === courseTitle);
+            const maxCoursePrice = foundCourse?.monthlyPrice || 0;
+
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
+                <Input
+                  label={`المبلغ المسدد نقداً (دج DZD)${maxCoursePrice > 0 ? ` • الحد الأقصى: ${formatDZD(maxCoursePrice)}` : ''}`}
+                  type="number"
+                  min="1"
+                  max={maxCoursePrice > 0 ? String(maxCoursePrice) : undefined}
+                  placeholder={maxCoursePrice > 0 ? `الحد الأقصى: ${maxCoursePrice}` : "مثال: 6000"}
+                  value={amount}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (maxCoursePrice > 0 && Number(val) > maxCoursePrice) {
+                      setAmount(String(maxCoursePrice));
+                    } else {
+                      setAmount(val);
+                    }
+                  }}
+                  required
+                />
+                <div className="form-group">
+                  <label className="form-label">طريقة الدفع</label>
+                  <div
+                    style={{
+                      height: 'var(--height-input)',
+                      minHeight: 'var(--height-input)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '0 var(--space-3)',
+                      backgroundColor: 'var(--color-bg-surface-secondary)',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      color: 'var(--color-text-secondary)',
+                      userSelect: 'none',
+                    }}
+                  >
+                    <span>الدفع نقداً فقط (Cash)</span>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()}
 
           <Input
             label="ملاحظات السند (اختياري)"
@@ -1542,7 +1764,7 @@ export const Payments: React.FC<PaymentsProps> = ({
                 const schoolName = currentSchool?.name || 'مدرستي التعليمية';
                 const dateTime = `${formatDateArabic(receiptToPrint.date)} - ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
 
-                const width = paperSize === 'A5' ? '148mm' : '80mm';
+                const width = paperSize === 'A5' ? '140mm' : '72mm';
 
                 const printWindow = window.open('', '_blank', 'width=450,height=600');
                 if (!printWindow) {
@@ -1559,77 +1781,150 @@ export const Payments: React.FC<PaymentsProps> = ({
                     <style>
                       @page {
                         size: ${paperSize === 'A5' ? 'A5 portrait' : '80mm auto'};
-                        margin: 4mm;
+                        margin: 0 !important;
+                      }
+                      * {
+                        box-sizing: border-box;
+                        color: #000000 !important;
+                        border-color: #000000 !important;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                      }
+                      html, body {
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        direction: rtl;
+                        background: #ffffff !important;
+                        color: #000000 !important;
+                        height: auto !important;
+                        min-height: 0 !important;
+                        max-height: none !important;
                       }
                       body {
-                        font-family: 'Courier New', Courier, monospace, 'Cairo', Tahoma, sans-serif;
-                        margin: 0;
-                        padding: 8px;
-                        color: #000;
-                        background: #fff;
-                        width: ${width};
-                        font-size: 13px;
-                        line-height: 1.4;
+                        font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+                        margin: 0 auto !important;
+                        padding: 2mm 3mm 1mm 3mm !important;
+                        width: 100%;
+                        max-width: ${width};
+                        font-size: 12px;
+                        line-height: 1.35;
                         box-sizing: border-box;
+                        -webkit-font-smoothing: antialiased;
                       }
                       .header {
                         text-align: center;
-                        border-bottom: 1px dashed #000;
-                        padding-bottom: 8px;
-                        margin-bottom: 8px;
+                        border-bottom: 1.5px dashed #000000;
+                        padding-bottom: 5px;
+                        margin-bottom: 5px;
                       }
                       .school-name {
-                        font-size: 16px;
-                        font-weight: bold;
-                        margin-bottom: 3px;
+                        font-size: 15px;
+                        font-weight: 900;
+                        color: #000000 !important;
+                        margin-bottom: 2px;
+                        word-break: break-word;
+                        overflow-wrap: anywhere;
                       }
                       .receipt-title {
-                        font-size: 13px;
-                        font-weight: bold;
+                        font-size: 12px;
+                        font-weight: 800;
+                        color: #000000 !important;
                       }
                       .meta-row {
                         display: flex;
                         justify-content: space-between;
+                        align-items: flex-start;
                         font-size: 11px;
-                        margin: 3px 0;
+                        font-weight: 700;
+                        margin: 2px 0;
+                        gap: 6px;
+                        width: 100%;
+                        color: #000000 !important;
                       }
                       .divider {
-                        border-top: 1px dashed #000;
-                        margin: 8px 0;
+                        border-top: 1.5px dashed #000000;
+                        margin: 4px 0;
+                        width: 100%;
                       }
                       .double-divider {
-                        border-top: 2px solid #000;
-                        margin: 8px 0;
+                        border-top: 2.5px solid #000000;
+                        margin: 5px 0;
+                        width: 100%;
                       }
                       .info-row {
                         display: flex;
                         justify-content: space-between;
-                        margin: 5px 0;
+                        align-items: flex-start;
+                        gap: 6px;
+                        margin: 3px 0;
+                        width: 100%;
+                        box-sizing: border-box;
                       }
                       .info-label {
-                        color: #333;
+                        color: #000000 !important;
+                        font-weight: 700;
+                        flex-shrink: 0;
+                        white-space: nowrap;
+                        font-size: 12px;
+                        line-height: 1.35;
                       }
                       .info-value {
-                        font-weight: bold;
+                        color: #000000 !important;
+                        font-weight: 800;
+                        text-align: left;
+                        flex: 1;
+                        min-width: 0;
+                        max-width: 72%;
+                        word-break: break-word;
+                        overflow-wrap: anywhere;
+                        font-size: 12px;
+                        line-height: 1.35;
                       }
                       .total-row {
                         display: flex;
                         justify-content: space-between;
+                        align-items: center;
                         font-size: 14px;
-                        font-weight: bold;
-                        margin: 6px 0;
+                        font-weight: 900;
+                        color: #000000 !important;
+                        margin: 4px 0;
+                        width: 100%;
+                        padding: 4px 0;
+                        border-top: 1.5px dashed #000000;
+                        border-bottom: 1.5px dashed #000000;
                       }
                       .footer {
                         text-align: center;
                         font-size: 11px;
-                        margin-top: 10px;
-                        border-top: 1px dashed #000;
-                        padding-top: 6px;
+                        font-weight: 700;
+                        color: #000000 !important;
+                        margin-top: 6px;
+                        margin-bottom: 0 !important;
+                        border-top: 1.5px dashed #000000;
+                        padding-top: 4px;
+                        padding-bottom: 0 !important;
                       }
                       @media print {
-                        body {
-                          width: ${width};
-                          padding: 0;
+                        @page {
+                          size: ${paperSize === 'A5' ? 'A5 portrait' : '80mm auto'};
+                          margin: 0 !important;
+                        }
+                        html, body {
+                          width: 100% !important;
+                          max-width: ${width} !important;
+                          height: auto !important;
+                          min-height: 0 !important;
+                          max-height: none !important;
+                          margin: 0 auto !important;
+                          padding: 2mm 3mm 0mm 3mm !important;
+                          box-sizing: border-box !important;
+                          overflow: hidden !important;
+                          -webkit-print-color-adjust: exact !important;
+                          print-color-adjust: exact !important;
+                        }
+                        .footer {
+                          margin-bottom: 0 !important;
+                          padding-bottom: 0 !important;
                         }
                       }
                     </style>
@@ -1641,7 +1936,8 @@ export const Payments: React.FC<PaymentsProps> = ({
                     </div>
 
                     <div class="meta-row">
-                      <span>رقم الوصل: <strong>${receiptToPrint.receiptNumber}</strong></span>
+                      <span>رقم الوصل:</span>
+                      <strong>${receiptToPrint.receiptNumber}</strong>
                     </div>
                     <div class="meta-row">
                       <span>التاريخ والوقت:</span>
@@ -1664,8 +1960,11 @@ export const Payments: React.FC<PaymentsProps> = ({
                       <span class="info-label">الحصص:</span>
                       <span class="info-value">${sessions} حصص</span>
                     </div>
-
-                    <div class="double-divider"></div>
+                    ${receiptToPrint.notes ? `
+                    <div class="info-row">
+                      <span class="info-label">البيان / التبرير:</span>
+                      <span class="info-value">${receiptToPrint.notes}</span>
+                    </div>` : ''}
 
                     <div class="total-row">
                       <span>المبلغ المسدد:</span>
@@ -1754,59 +2053,70 @@ export const Payments: React.FC<PaymentsProps> = ({
               {/* Minimalist Live Receipt Preview */}
               <div
                 style={{
-                  border: '2px dashed var(--color-border)',
+                  border: '2px solid #000000',
                   borderRadius: 'var(--radius-md)',
-                  padding: '16px',
+                  padding: '12px 14px 10px 14px',
                   backgroundColor: '#ffffff',
-                  color: '#111827',
-                  fontFamily: 'Courier New, monospace, sans-serif',
-                  fontSize: '0.875rem',
-                  maxWidth: '340px',
+                  color: '#000000',
+                  fontFamily: 'Cairo, Segoe UI, Tahoma, Arial, sans-serif',
+                  fontSize: '0.8rem',
+                  maxWidth: '320px',
                   margin: '0 auto',
                   width: '100%',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                  boxSizing: 'border-box',
+                  direction: 'rtl',
                 }}
               >
-                <div style={{ textAlign: 'center', borderBottom: '1px dashed #9ca3af', paddingBottom: '8px', marginBottom: '10px' }}>
-                  <div style={{ fontSize: '1rem', fontWeight: 800 }}>{schoolName}</div>
-                  <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#4b5563' }}>وصل استلام نقدي</div>
+                <div style={{ textAlign: 'center', borderBottom: '1.5px dashed #000000', paddingBottom: '6px', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 900, color: '#000000', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{schoolName}</div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#000000' }}>وصل استلام نقدي</div>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '4px' }}>
-                  <span>رقم الوصل:</span>
-                  <strong>{receiptToPrint.receiptNumber}</strong>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', fontSize: '0.75rem', marginBottom: '4px', gap: '6px', color: '#000000' }}>
+                  <span style={{ flexShrink: 0, fontWeight: 700 }}>رقم الوصل:</span>
+                  <strong style={{ textAlign: 'left', wordBreak: 'break-word', fontWeight: 800 }}>{receiptToPrint.receiptNumber}</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px' }}>
-                  <span>التاريخ والوقت:</span>
-                  <span>{dateTime}</span>
-                </div>
-
-                <div style={{ borderTop: '1px dashed #d1d5db', margin: '8px 0' }} />
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ color: '#4b5563' }}>اسم التلميذ:</span>
-                  <span style={{ fontWeight: 700 }}>{receiptToPrint.studentName}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ color: '#4b5563' }}>الفوج:</span>
-                  <span style={{ fontWeight: 700 }}>{receiptToPrint.courseTitle}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ color: '#4b5563' }}>الحصص:</span>
-                  <span style={{ fontWeight: 700 }}>{sessions} حصص</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', fontSize: '0.75rem', marginBottom: '6px', gap: '6px', color: '#000000' }}>
+                  <span style={{ flexShrink: 0, fontWeight: 700 }}>التاريخ والوقت:</span>
+                  <span style={{ textAlign: 'left', fontWeight: 700 }}>{dateTime}</span>
                 </div>
 
-                <div style={{ borderTop: '2px solid #111827', margin: '10px 0' }} />
+                <div style={{ borderTop: '1.5px dashed #000000', margin: '6px 0' }} />
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1rem', fontWeight: 800, marginBottom: '6px' }}>
-                  <span>المبلغ المسدد:</span>
-                  <span style={{ color: 'var(--color-primary, #2563eb)' }}>{formatDZD(receiptToPrint.amount)}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '5px', gap: '6px' }}>
+                  <span style={{ color: '#000000', fontWeight: 700, flexShrink: 0 }}>اسم التلميذ:</span>
+                  <span style={{ fontWeight: 800, color: '#000000', textAlign: 'left', flex: 1, minWidth: 0, maxWidth: '72%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{receiptToPrint.studentName}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
-                  <span style={{ color: '#4b5563' }}>المبلغ المتبقي:</span>
-                  <span style={{ fontWeight: 700, color: remaining > 0 ? '#dc2626' : '#16a34a' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '5px', gap: '6px' }}>
+                  <span style={{ color: '#000000', fontWeight: 700, flexShrink: 0 }}>الفوج:</span>
+                  <span style={{ fontWeight: 800, color: '#000000', textAlign: 'left', flex: 1, minWidth: 0, maxWidth: '72%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{receiptToPrint.courseTitle}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '5px', gap: '6px' }}>
+                  <span style={{ color: '#000000', fontWeight: 700, flexShrink: 0 }}>الحصص:</span>
+                  <span style={{ fontWeight: 800, color: '#000000', textAlign: 'left' }}>{sessions} حصص</span>
+                </div>
+                {receiptToPrint.notes && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '5px', fontSize: '0.75rem', gap: '6px' }}>
+                    <span style={{ color: '#000000', fontWeight: 700, flexShrink: 0 }}>البيان / التبرير:</span>
+                    <span style={{ fontWeight: 800, color: '#000000', maxWidth: '72%', textAlign: 'left', flex: 1, minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{receiptToPrint.notes}</span>
+                  </div>
+                )}
+
+                <div style={{ borderTop: '1.5px dashed #000000', borderBottom: '1.5px dashed #000000', padding: '6px 0', margin: '8px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 900, fontSize: '0.92rem', color: '#000000' }}>المبلغ المسدد:</span>
+                  <span style={{ fontWeight: 900, fontSize: '0.95rem', color: '#000000' }}>{formatDZD(receiptToPrint.amount)}</span>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', fontSize: '0.78rem', gap: '6px' }}>
+                  <span style={{ color: '#000000', fontWeight: 700, flexShrink: 0 }}>المبلغ المتبقي:</span>
+                  <span style={{ fontWeight: 800, color: '#000000', textAlign: 'left' }}>
                     {remaining > 0 ? formatDZD(remaining) : '0 دج (خالص)'}
                   </span>
+                </div>
+
+                <div style={{ textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: '#000000', borderTop: '1.5px dashed #000000', marginTop: '8px', paddingTop: '5px' }}>
+                  شكراً لثقتكم بمؤسستنا
                 </div>
               </div>
             </div>

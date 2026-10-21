@@ -176,24 +176,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
                 </div>
               </button>
 
-              {!isReceptionMode && (
-                <button
-                  type="button"
-                  className="mobile-quick-action-btn"
-                  onClick={() => {
-                    setIsQuickActionOpen(false);
-                    onNavigate('students');
-                  }}
-                >
-                  <div className="mobile-quick-action-icon" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: '#2563eb' }}>
-                    <GraduationCap size={22} color="#2563eb" />
-                  </div>
-                  <div className="mobile-quick-action-text">
-                    <div className="mobile-quick-action-title">إدارة وسجل التلاميذ</div>
-                    <div className="mobile-quick-action-desc">عرض قائمة كل التلاميذ والاشتراكات</div>
-                  </div>
-                </button>
-              )}
+
 
               {!isReceptionMode && (
                 <button

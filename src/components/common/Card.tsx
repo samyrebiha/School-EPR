@@ -6,6 +6,7 @@ export interface CardProps {
   className?: string;
   header?: React.ReactNode;
   title?: string;
+  description?: string;
   action?: React.ReactNode;
   style?: React.CSSProperties;
 }
@@ -15,14 +16,22 @@ export const Card: React.FC<CardProps> = ({
   className = '',
   header,
   title,
+  description,
   action,
   style,
 }) => {
   return (
     <div className={`card ${className}`} style={style}>
-      {(header || title || action) && (
+      {(header || title || description || action) && (
         <div className="card-header">
-          {title && <h3 className="card-title">{title}</h3>}
+          <div>
+            {title && <h3 className="card-title">{title}</h3>}
+            {description && (
+              <p className="card-description" style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginTop: '3px' }}>
+                {description}
+              </p>
+            )}
+          </div>
           {header}
           {action && <div className="card-action">{action}</div>}
         </div>

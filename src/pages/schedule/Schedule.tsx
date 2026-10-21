@@ -45,19 +45,29 @@ export const Schedule: React.FC = () => {
 
   // Consolidate schedule items from courses
   const scheduleItems = courses.flatMap((c) =>
-    (c.scheduleDays || []).map((day) => ({
-      id: `${c.id}-${day}`,
-      day,
-      time: c.scheduleTime,
-      title: c.title,
-      subject: c.subject,
-      academicLevel: c.academicLevel,
-      teacher: c.teacherName,
-      teacherId: c.teacherId,
-      room: c.roomName,
-      type: c.type,
-      studentsCount: c.enrolledList?.length || 0,
-    }))
+    (c.scheduleDays || []).map((day) => {
+      let time = c.scheduleTime;
+      // If course has per-day schedule formatted as "السبت (08:00 صباحاً - 10:00 صباحاً) • الثلاثاء (05:00 مساءً - 07:00 مساءً)"
+      if (c.scheduleTime && c.scheduleTime.includes('(') && c.scheduleTime.includes(day)) {
+        const match = c.scheduleTime.match(new RegExp(`${day}\\s*\\(([^)]+)\\)`));
+        if (match && match[1]) {
+          time = match[1];
+        }
+      }
+      return {
+        id: `${c.id}-${day}`,
+        day,
+        time,
+        title: c.title,
+        subject: c.subject,
+        academicLevel: c.academicLevel,
+        teacher: c.teacherName,
+        teacherId: c.teacherId,
+        room: c.roomName,
+        type: c.type,
+        studentsCount: c.enrolledList?.length || 0,
+      };
+    })
   );
 
   const filteredItems = scheduleItems.filter((item) => {

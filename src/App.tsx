@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { SchoolProvider } from './contexts/SchoolContext';
 import { ToastProvider } from './contexts/ToastContext';
+import { NetworkProvider } from './contexts/NetworkContext';
 import { DataProvider } from './contexts/DataContext';
+import { TypographyProvider } from './contexts/TypographyContext';
 import { AppLayout } from './components/layout/AppLayout';
 import { QuickActionType } from './components/layout/BottomNav';
 
@@ -32,10 +34,17 @@ function AppContent() {
 
   // If in reception mode and currently on an admin-only page, redirect to dashboard
   useEffect(() => {
-    if (isReceptionMode && ['payroll', 'reports', 'settings', 'students'].includes(activePage)) {
+    if (isReceptionMode && ['payroll', 'reports', 'students'].includes(activePage)) {
       setActivePage('dashboard');
     }
   }, [isReceptionMode, activePage]);
+
+  // Redirect away from removed 'students' tab
+  useEffect(() => {
+    if (activePage === 'students') {
+      setActivePage('attendance');
+    }
+  }, [activePage]);
 
   // Secret URL listener for Super Admin Portal (#super-admin or ?portal=super-admin)
   useEffect(() => {
@@ -123,6 +132,8 @@ function AppContent() {
         );
       case 'attendance':
         return <Attendance />;
+      case 'cards_directory':
+        return <Attendance initialViewMode="cards_directory" />;
       case 'payments':
         return (
           <Payments
@@ -160,15 +171,19 @@ function AppContent() {
 
 export function App() {
   return (
-    <DataProvider>
-      <SchoolProvider>
-        <AuthProvider>
-          <ToastProvider>
-            <AppContent />
-          </ToastProvider>
-        </AuthProvider>
-      </SchoolProvider>
-    </DataProvider>
+    <ToastProvider>
+      <NetworkProvider>
+        <DataProvider>
+          <SchoolProvider>
+            <AuthProvider>
+              <TypographyProvider>
+                <AppContent />
+              </TypographyProvider>
+            </AuthProvider>
+          </SchoolProvider>
+        </DataProvider>
+      </NetworkProvider>
+    </ToastProvider>
   );
 }
 

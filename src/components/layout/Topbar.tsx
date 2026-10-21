@@ -4,22 +4,41 @@ import {
   Building,
   LogOut,
   Menu,
+  ShieldCheck,
+  UserCheck,
+  Lock,
+  Settings,
+  RefreshCw,
+  CheckCheck,
+  WifiOff,
 } from 'lucide-react';
 import { useSchool } from '../../contexts/SchoolContext';
 import { useAuth } from '../../contexts/AuthContext';
-import { ShieldCheck, UserCheck, Lock } from 'lucide-react';
+import { useData } from '../../contexts/DataContext';
+import { useNetwork } from '../../contexts/NetworkContext';
 
 export interface TopbarProps {
   onOpenSearch: () => void;
   onToggleMobileSidebar: () => void;
+  onNavigate?: (page: string) => void;
 }
 
 export const Topbar: React.FC<TopbarProps> = ({
   onOpenSearch,
   onToggleMobileSidebar,
+  onNavigate,
 }) => {
   const { currentSchool } = useSchool();
   const { logout, isReceptionMode, isAdminMode, switchToReception, switchToAdmin } = useAuth();
+  const {
+    isAutoSaving,
+    lastSavedTime,
+    isRefreshing,
+    lastSyncTime,
+    refreshData,
+    pendingOfflineCount,
+  } = useData();
+  const { isOnline, openOfflineModal } = useNetwork();
 
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -109,6 +128,126 @@ export const Topbar: React.FC<TopbarProps> = ({
 
       {/* Left Side (RTL End): School Account & Logout */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2-5)', flexShrink: 0 }}>
+        {/* Auto-Save & Sync Status Indicator */}
+        <div className="topbar-autosave-indicator" style={{ display: 'flex', alignItems: 'center' }}>
+          {isAutoSaving ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: 'var(--space-1-5) var(--space-2-5)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                border: '1px solid rgba(59, 130, 246, 0.25)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                color: '#2563eb',
+              }}
+              title="جاري حفظ التغييرات تلقائياً في الذاكرة وقاعدة البيانات..."
+            >
+              <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />
+              <span className="sm:hidden">جارٍ الحفظ...</span>
+            </div>
+          ) : !isOnline ? (
+            <button
+              onClick={openOfflineModal}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: 'var(--space-1-5) var(--space-2-5)',
+                backgroundColor: '#fef3c7',
+                border: '1px solid #fde68a',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                color: '#b45309',
+                cursor: 'pointer',
+              }}
+              title="أنت تعمل بدون اتصال - جميع البيانات محفوظة محلياً بأمان. انقر للتفاصيل أو فحص الاتصال"
+            >
+              <WifiOff size={13} color="#d97706" />
+              <span className="sm:hidden">محفوظ محلياً</span>
+              {pendingOfflineCount > 0 && (
+                <span
+                  style={{
+                    backgroundColor: '#d97706',
+                    color: '#ffffff',
+                    borderRadius: '10px',
+                    padding: '1px 5px',
+                    fontSize: '0.6875rem',
+                    fontWeight: 700,
+                  }}
+                >
+                  {pendingOfflineCount}
+                </span>
+              )}
+            </button>
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: 'var(--space-1-5) var(--space-2-5)',
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                color: '#15803d',
+              }}
+              title={
+                lastSavedTime
+                  ? `آخر حفظ تلقائي: ${lastSavedTime.toLocaleTimeString('ar-DZ')}`
+                  : 'نظام الحفظ التلقائي نشط دائماً'
+              }
+            >
+              <CheckCheck size={14} color="#16a34a" />
+              <span className="sm:hidden">تم الحفظ تلقائياً</span>
+            </div>
+          )}
+        </div>
+
+        {/* Live Refresh Button */}
+        <button
+          onClick={() => refreshData(false)}
+          disabled={isRefreshing}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-1-5)',
+            padding: 'var(--space-1-5) var(--space-2-5)',
+            backgroundColor: 'var(--color-bg-surface-secondary)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-md)',
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            color: 'var(--color-text-secondary)',
+            cursor: isRefreshing ? 'wait' : 'pointer',
+            transition: 'all var(--transition-fast)',
+            minHeight: '34px',
+          }}
+          title={
+            lastSyncTime
+              ? `آخر تحديث: ${lastSyncTime.toLocaleTimeString('ar-DZ')} - انقر لإعادة التحديث الفوري للبيانات`
+              : 'تحديث البيانات الفوري من السيرفر'
+          }
+        >
+          <RefreshCw
+            size={13}
+            color="var(--color-text-secondary)"
+            style={{
+              animation: isRefreshing ? 'spin 1s linear infinite' : 'none',
+              flexShrink: 0,
+            }}
+          />
+          <span className="sm:hidden">
+            {isRefreshing ? 'جارٍ التحديث...' : 'تحديث'}
+          </span>
+        </button>
+
         {/* Mode Indicator Badge */}
         {isAdminMode ? (
           <div
@@ -166,6 +305,32 @@ export const Topbar: React.FC<TopbarProps> = ({
             <UserCheck size={14} color="var(--color-primary)" />
             <span>واجهة الاستقبال</span>
           </div>
+        )}
+
+        {/* Quick Settings Button */}
+        {onNavigate && (
+          <button
+            onClick={() => onNavigate('settings')}
+            title="الإعدادات ومظهر المنصة والخط"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-1-5)',
+              padding: 'var(--space-1-5) var(--space-2-5)',
+              backgroundColor: 'var(--color-bg-surface-secondary)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              color: 'var(--color-text-secondary)',
+              cursor: 'pointer',
+              transition: 'all var(--transition-fast)',
+              minHeight: '34px',
+            }}
+          >
+            <Settings size={14} color="var(--color-text-secondary)" />
+            <span className="sm:hidden">الإعدادات</span>
+          </button>
         )}
 
         {/* School Name Badge */}

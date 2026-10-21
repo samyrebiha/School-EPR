@@ -9,6 +9,7 @@ import {
   Clock,
   MapPin,
   Users,
+  Settings,
 } from 'lucide-react';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { StatCard, Card } from '../../components/common/Card';
@@ -67,6 +68,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
               onClick={() => onNavigate('courses')}
             >
               إنشاء دورة أو فوج جديد
+            </Button>
+            <Button
+              variant="outline"
+              rightIcon={<Settings size={16} />}
+              onClick={() => onNavigate('settings')}
+            >
+              الإعدادات
             </Button>
           </div>
         }

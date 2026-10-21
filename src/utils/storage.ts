@@ -61,22 +61,22 @@ const defaultSampleExpenses: Expense[] = [
 // Initial default school if localStorage is empty
 const defaultInitialSchools: SchoolTenant[] = [
   {
-    id: 'school-default',
-    name: 'مدرستي التعليمية',
-    code: 'MY-SCHOOL-01',
-    username: 'admin',
-    password: 'password123',
-    phone: '0550 00 00 00',
-    email: 'admin@school.dz',
-    address: 'المقر الرئيسي للمؤسسة',
-    wilaya: 'الجزائر العاصمة (16)',
+    id: 'school-1788371708568',
+    name: 'مدرسة النور',
+    code: 'SCH-9861',
+    username: 'nour2026',
+    password: 'adminnour2006',
+    phone: '0673818821',
+    email: 'nour2026@school.dz',
+    address: 'كوينين ، بجانب مسجد أبي بكر الصديق ، الوادي',
+    wilaya: 'كوينين ، الوادي',
     plan: 'professional',
     planStatus: 'active',
-    subscriptionStart: new Date().toISOString().split('T')[0],
-    subscriptionEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
+    subscriptionStart: '2026-09-02',
+    subscriptionEnd: '2027-09-02',
     studentsCount: 0,
-    revenueGenerated: 30000,
-    logoText: 'مدرستي التعليمية',
+    revenueGenerated: 20000,
+    logoText: 'مدرسة النور',
   },
 ];
 
@@ -102,7 +102,7 @@ export const storage = {
   getSchools: (): SchoolTenant[] => getStoredData(STORAGE_KEYS.SCHOOLS, defaultInitialSchools),
   setSchools: (schools: SchoolTenant[]) => setStoredData(STORAGE_KEYS.SCHOOLS, schools),
 
-  getCurrentSchoolId: (): string => getStoredData(STORAGE_KEYS.CURRENT_SCHOOL_ID, 'school-default'),
+  getCurrentSchoolId: (): string => getStoredData(STORAGE_KEYS.CURRENT_SCHOOL_ID, 'school-1788371708568'),
   setCurrentSchoolId: (id: string) => setStoredData(STORAGE_KEYS.CURRENT_SCHOOL_ID, id),
 
   getTeachers: (): Teacher[] => getStoredData(STORAGE_KEYS.TEACHERS, []),

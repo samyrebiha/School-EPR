@@ -32,10 +32,59 @@ export const Teachers: React.FC<TeachersProps> = ({
 }) => {
   const { success } = useToast();
   const { isReceptionMode } = useAuth();
-  const { teachers, addTeacher, deleteTeacher } = useData();
+  const { teachers, addTeacher, updateTeacher, deleteTeacher } = useData();
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(isAddModalOpenInitially);
   const [teacherToDelete, setTeacherToDelete] = useState<Teacher | null>(null);
+
+  // Edit State
+  const [teacherToEdit, setTeacherToEdit] = useState<Teacher | null>(null);
+  const [editFullName, setEditFullName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editSubject, setEditSubject] = useState('');
+  const [editSpecialization, setEditSpecialization] = useState(DEFAULT_ACADEMIC_LEVEL);
+  const [editCompensationType, setEditCompensationType] = useState<TeacherCompensationType>('percentage_per_student');
+  const [editCommissionPercentage, setEditCommissionPercentage] = useState('60');
+  const [editFixedCourseRate, setEditFixedCourseRate] = useState('1000');
+  const [editStatus, setEditStatus] = useState<'active' | 'inactive'>('active');
+
+  const handleOpenEditModal = (teacher: Teacher) => {
+    setTeacherToEdit(teacher);
+    setEditFullName(teacher.fullName);
+    setEditPhone(teacher.phone);
+    setEditEmail(teacher.email || '');
+    setEditSubject(teacher.subject);
+    setEditSpecialization(teacher.specialization || DEFAULT_ACADEMIC_LEVEL);
+    setEditCompensationType(teacher.compensationType === 'percentage_per_student' ? 'percentage_per_student' : 'fixed_per_student');
+    setEditCommissionPercentage(String(teacher.commissionPercentage ?? 60));
+    setEditFixedCourseRate(String(teacher.fixedRatePerStudent || teacher.fixedCourseRate || 1000));
+    setEditStatus(teacher.status || 'active');
+  };
+
+  const handleSaveEditTeacher = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!teacherToEdit || !editFullName.trim() || !editPhone.trim() || !editSubject.trim()) return;
+
+    const rate = Number(editFixedCourseRate) || 1000;
+    const updated: Teacher = {
+      ...teacherToEdit,
+      fullName: editFullName.trim(),
+      phone: editPhone.trim(),
+      email: editEmail.trim() || `${editPhone.trim()}@school.dz`,
+      subject: editSubject.trim(),
+      specialization: editSpecialization.trim() || DEFAULT_ACADEMIC_LEVEL,
+      compensationType: editCompensationType,
+      commissionPercentage: Number(editCommissionPercentage) || 60,
+      fixedCourseRate: rate,
+      fixedRatePerStudent: rate,
+      status: editStatus,
+    };
+
+    updateTeacher(updated);
+    setTeacherToEdit(null);
+    success(`تم تعديل بيانات الأستاذ "${updated.fullName}" بنجاح!`, 'تم الحفظ');
+  };
 
   // Form State
   const [fullName, setFullName] = useState('');
@@ -45,12 +94,13 @@ export const Teachers: React.FC<TeachersProps> = ({
   const [specialization, setSpecialization] = useState(DEFAULT_ACADEMIC_LEVEL);
   const [compensationType, setCompensationType] = useState<TeacherCompensationType>('percentage_per_student');
   const [commissionPercentage, setCommissionPercentage] = useState('60');
-  const [fixedCourseRate, setFixedCourseRate] = useState('25000');
+  const [fixedCourseRate, setFixedCourseRate] = useState('1000');
 
   const handleAddTeacher = (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim() || !phone.trim() || !subject.trim()) return;
 
+    const rate = Number(fixedCourseRate) || 1000;
     const newTeacher: Teacher = {
       id: `tch-${Date.now()}`,
       fullName: fullName.trim(),
@@ -60,7 +110,8 @@ export const Teachers: React.FC<TeachersProps> = ({
       specialization: specialization.trim() || DEFAULT_ACADEMIC_LEVEL,
       compensationType,
       commissionPercentage: Number(commissionPercentage) || 60,
-      fixedCourseRate: Number(fixedCourseRate) || 25000,
+      fixedCourseRate: rate,
+      fixedRatePerStudent: rate,
       groupsCount: 0,
       totalEarned: 0,
       totalPaid: 0,
@@ -75,9 +126,7 @@ export const Teachers: React.FC<TeachersProps> = ({
     const typeDesc =
       compensationType === 'percentage_per_student'
         ? `بنسبة ${newTeacher.commissionPercentage}% من كل تلميذ`
-        : compensationType === 'percentage_per_course'
-        ? `بنسبة ${newTeacher.commissionPercentage}% من سعر الدورة مهما كان عدد التلاميذ`
-        : `بمبلغ ثابت ${formatDZD(newTeacher.fixedCourseRate || 0)} عن كل دورة`;
+        : `بمبلغ مقطوع ${formatDZD(newTeacher.fixedRatePerStudent || newTeacher.fixedCourseRate || 1000)} عن كل تلميذ`;
 
     success(`تم تسجيل الأستاذ ${fullName} بنجاح (${typeDesc})!`, 'تمت الإضافة');
 
@@ -89,7 +138,7 @@ export const Teachers: React.FC<TeachersProps> = ({
     setSpecialization(DEFAULT_ACADEMIC_LEVEL);
     setCompensationType('percentage_per_student');
     setCommissionPercentage('60');
-    setFixedCourseRate('25000');
+    setFixedCourseRate('1000');
   };
 
   const confirmDeleteTeacher = () => {
@@ -150,29 +199,7 @@ export const Teachers: React.FC<TeachersProps> = ({
       render: (t) => {
         const type = t.compensationType || 'percentage_per_student';
 
-        if (type === 'percentage_per_course') {
-          return (
-            <div>
-              <span
-                style={{
-                  fontWeight: 700,
-                  padding: '3px 8px',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--color-info-bg)',
-                  color: 'var(--color-info)',
-                  fontSize: '0.75rem',
-                }}
-              >
-                {t.commissionPercentage || 60}% من سعر الدورة
-              </span>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-                (مهما كان عدد التلاميذ)
-              </div>
-            </div>
-          );
-        }
-
-        if (type === 'fixed_per_course') {
+        if (type === 'fixed_per_student' || (type as string) === 'fixed_per_course') {
           return (
             <div>
               <span
@@ -185,16 +212,16 @@ export const Teachers: React.FC<TeachersProps> = ({
                   fontSize: '0.75rem',
                 }}
               >
-                {formatDZD(t.fixedCourseRate || 25000)} / دورة
+                {formatDZD(t.fixedRatePerStudent || t.fixedCourseRate || 1000)} / تلميذ
               </span>
               <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-                (مبلغ ثابت عن الفوج)
+                (مبلغ مقطوع من كل تلميذ)
               </div>
             </div>
           );
         }
 
-        // Default: per student
+        // Default: per student percentage
         return (
           <div>
             <span
@@ -210,7 +237,7 @@ export const Teachers: React.FC<TeachersProps> = ({
               {t.commissionPercentage || 60}% من كل تلميذ
             </span>
             <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-              (حسب الحضور والتسجيل)
+              (نسبة مئوية من الاشتراك)
             </div>
           </div>
         );
@@ -241,6 +268,16 @@ export const Teachers: React.FC<TeachersProps> = ({
       width: '120px',
       render: (t) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Button
+            variant="ghost"
+            size="sm"
+            isIconOnly
+            title="تعديل بيانات الأستاذ"
+            onClick={() => handleOpenEditModal(t)}
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            <Edit2 size={16} />
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -322,22 +359,13 @@ export const Teachers: React.FC<TeachersProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
-            <Input
-              label="المادة المدرسة (نص حر)"
-              placeholder="مثال: الرياضيات، الفلسفة..."
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              required
-            />
-            <Select
-              label="الطور / المستوى الدراسي"
-              value={specialization}
-              onChange={(e) => setSpecialization(e.target.value)}
-              options={ACADEMIC_LEVEL_OPTIONS}
-              required
-            />
-          </div>
+          <Input
+            label="المادة المدرسة (نص حر)"
+            placeholder="مثال: الرياضيات، الفلسفة..."
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            required
+          />
 
           {/* Compensation Model Box */}
           <div
@@ -357,8 +385,7 @@ export const Teachers: React.FC<TeachersProps> = ({
               onChange={(e) => setCompensationType(e.target.value as TeacherCompensationType)}
               options={[
                 { value: 'percentage_per_student', label: '1. نسبة مئوية (%) من اشتراك كل تلميذ مسجل' },
-                { value: 'percentage_per_course', label: '2. نسبة مئوية (%) من سعر الدورة مهما كان عدد التلاميذ' },
-                { value: 'fixed_per_course', label: '3. مبلغ ثابت محدد (دج) عن كل دورة / فوج' },
+                { value: 'fixed_per_student', label: '2. مبلغ مقطوع (دج) من كل تلميذ مسجل' },
               ]}
             />
 
@@ -374,33 +401,16 @@ export const Teachers: React.FC<TeachersProps> = ({
                   required
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>
-                  يتم ضرب نسبة الأستاذ في سعر اشتراك الدورة لكل تلميذ مسجل (مثال: 10 تلاميذ × 6,000 دج × 60% = 36,000 دج).
+                  يتم ضرب نسبة الأستاذ في سعر اشتراك الدورة لكل تلميذ مسجل (مثال: إذا كانت الدورة بـ 1,500 دج والنسبة 60%، يأخذ الأستاذ 900 دج والمدرسة 600 دج).
                 </div>
               </div>
             )}
 
-            {compensationType === 'percentage_per_course' && (
+            {compensationType === 'fixed_per_student' && (
               <div>
                 <Input
-                  label="نسبة الأستاذ من السعر الإجمالي للدورة (%)"
-                  placeholder="60"
-                  type="number"
-                  value={commissionPercentage}
-                  onChange={(e) => setCommissionPercentage(e.target.value)}
-                  prefixIcon={<Percent size={15} />}
-                  required
-                />
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>
-                  يأخذ الأستاذ هذه النسبة من سعر الدورة الأساسي مهما كان عدد التلاميذ المسجلين في القاعة.
-                </div>
-              </div>
-            )}
-
-            {compensationType === 'fixed_per_course' && (
-              <div>
-                <Input
-                  label="المبلغ الثابت المخصص للأستاذ عن الفوج (دج DZD)"
-                  placeholder="25000"
+                  label="مستحق الأستاذ المقطوع عن كل تلميذ (دج DZD)"
+                  placeholder="1000"
                   type="number"
                   value={fixedCourseRate}
                   onChange={(e) => setFixedCourseRate(e.target.value)}
@@ -408,7 +418,7 @@ export const Teachers: React.FC<TeachersProps> = ({
                   required
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>
-                  يتقاضى الأستاذ هذا المبلغ الثابت عن كل فوج يؤطره بغض النظر عن عدد التلاميذ المسجلين.
+                  مبلغ مقطوع للأستاذ عن كل تلميذ (مثال: الدورة بـ 1500 دج الأستاذ يأخذ 1000 دج والمدرسة 500 دج).
                 </div>
               </div>
             )}
@@ -451,6 +461,110 @@ export const Teachers: React.FC<TeachersProps> = ({
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Edit Teacher Modal */}
+      <Modal
+        isOpen={!!teacherToEdit}
+        onClose={() => setTeacherToEdit(null)}
+        title={`تعديل بيانات الأستاذ: ${teacherToEdit?.fullName || ''}`}
+        description="تحديث معلومات الأستاذ وطريقة احتساب الأتعاب ونسبة العمولة"
+        maxWidth="540px"
+      >
+        <form onSubmit={handleSaveEditTeacher} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          <Input
+            label="اسم الأستاذ الكامل"
+            value={editFullName}
+            onChange={(e) => setEditFullName(e.target.value)}
+            required
+            autoFocus
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
+            <Input
+              label="رقم الهاتف"
+              value={editPhone}
+              onChange={(e) => setEditPhone(e.target.value)}
+              required
+            />
+            <Input
+              label="البريد الإلكتروني (اختياري)"
+              value={editEmail}
+              onChange={(e) => setEditEmail(e.target.value)}
+            />
+          </div>
+
+          <Input
+            label="المادة المدرسة (نص حر)"
+            value={editSubject}
+            onChange={(e) => setEditSubject(e.target.value)}
+            required
+          />
+
+          <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
+            <Select
+              label="حالة الحساب"
+              value={editStatus}
+              onChange={(e) => setEditStatus(e.target.value as 'active' | 'inactive')}
+              options={[
+                { value: 'active', label: 'نشط (Active)' },
+                { value: 'inactive', label: 'غير نشط (Inactive)' },
+              ]}
+            />
+            <Select
+              label="طريقة احتساب الأتعاب"
+              value={editCompensationType}
+              onChange={(e) => setEditCompensationType(e.target.value as TeacherCompensationType)}
+              options={[
+                { value: 'percentage_per_student', label: '1. نسبة مئوية (%) من اشتراك كل تلميذ' },
+                { value: 'fixed_per_student', label: '2. مبلغ مقطوع (دج) من كل تلميذ' },
+              ]}
+            />
+          </div>
+
+          <div>
+            {editCompensationType === 'percentage_per_student' && (
+              <div>
+                <Input
+                  label="نسبة الأستاذ من اشتراك كل تلميذ (%)"
+                  type="number"
+                  value={editCommissionPercentage}
+                  onChange={(e) => setEditCommissionPercentage(e.target.value)}
+                  prefixIcon={<Percent size={15} />}
+                  required
+                />
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>
+                  يتم ضرب نسبة الأستاذ في سعر اشتراك الدورة لكل تلميذ مسجل (مثال: إذا كانت الدورة بـ 1,500 دج والنسبة 60%، يأخذ الأستاذ 900 دج والمدرسة 600 دج).
+                </div>
+              </div>
+            )}
+
+            {editCompensationType === 'fixed_per_student' && (
+              <div>
+                <Input
+                  label="مستحق الأستاذ المقطوع عن كل تلميذ (دج DZD)"
+                  type="number"
+                  value={editFixedCourseRate}
+                  onChange={(e) => setEditFixedCourseRate(e.target.value)}
+                  prefixIcon={<Coins size={15} />}
+                  required
+                />
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>
+                  مبلغ مقطوع للأستاذ عن كل تلميذ (مثال: الدورة بـ 1500 دج الأستاذ يأخذ 1000 دج والمدرسة 500 دج).
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 'var(--space-2)', marginTop: 'var(--space-2)', flexWrap: 'wrap' }}>
+            <Button type="submit" variant="primary">
+              حفظ التعديلات
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => setTeacherToEdit(null)}>
+              إلغاء
+            </Button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

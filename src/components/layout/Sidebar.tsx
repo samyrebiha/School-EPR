@@ -11,7 +11,6 @@ import {
   Settings,
   BookOpen,
   School,
-  GraduationCap,
 } from 'lucide-react';
 import { useSchool } from '../../contexts/SchoolContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -83,16 +82,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           label: 'الحضور والغياب',
           icon: <CheckCircle2 size={18} />,
         },
-        // Admin only: Students Management
-        ...(!isReceptionMode
-          ? [
-              {
-                id: 'students',
-                label: 'إدارة التلاميذ',
-                icon: <GraduationCap size={18} />,
-              },
-            ]
-          : []),
+        {
+          id: 'cards_directory',
+          label: 'دليل بطاقات التلاميذ',
+          icon: <CreditCard size={18} />,
+        },
       ],
     },
     {
@@ -115,7 +109,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           : []),
       ],
     },
-    // Admin only: Analytics & Settings
+    // Admin only: Analytics
     ...(!isReceptionMode
       ? [
           {
@@ -128,18 +122,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               },
             ],
           },
-          {
-            groupLabel: '',
-            items: [
-              {
-                id: 'settings',
-                label: 'الإعدادات',
-                icon: <Settings size={18} />,
-              },
-            ],
-          },
         ]
       : []),
+    // Settings accessible to both Admin and Reception
+    {
+      groupLabel: '',
+      items: [
+        {
+          id: 'settings',
+          label: 'الإعدادات',
+          icon: <Settings size={18} />,
+        },
+      ],
+    },
   ];
 
   const navGroups = allNavGroups.filter((g) => g.items.length > 0);

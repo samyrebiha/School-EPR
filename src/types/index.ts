@@ -32,7 +32,7 @@ export interface SchoolTenant {
 
 export type PaymentStatus = 'paid' | 'partial' | 'unpaid' | 'overdue';
 
-export type AttendanceLogStatus = 'present' | 'absent_counted' | 'absent_uncounted' | 'renewed' | 'payment';
+export type AttendanceLogStatus = 'present' | 'absent_counted' | 'absent_uncounted' | 'renewed' | 'payment' | 'single_session';
 
 export interface SessionAttendanceLog {
   id: string;
@@ -43,7 +43,9 @@ export interface SessionAttendanceLog {
   type?: AttendanceLogStatus;
   notes?: string;
   amount?: number;
+  teacherAmount?: number; // مبلغ الأستاذ من الحصة الواحدة
   receiptNumber?: string;
+  method?: 'rfid' | 'manual' | 'barcode';
 }
 
 export interface TeacherPayoutLog {
@@ -58,6 +60,7 @@ export interface TeacherPayoutLog {
 
 export interface Student {
   id: string;
+  cardId?: string; // رمز البطاقة الإلكترونية الذكية / RFID UID / باركود
   fullName: string;
   phone: string;
   gender: 'ذكر' | 'أنثى';
@@ -68,6 +71,7 @@ export interface Student {
   enrolledCourseTitle?: string;
   totalPaid: number;
   totalDebt: number;
+  coursePrice?: number;
   totalSessions?: number; // e.g. 5
   attendedSessions?: number; // e.g. 1
   attendanceLogs?: SessionAttendanceLog[];
@@ -76,10 +80,14 @@ export interface Student {
   schoolRegistrationPaid?: boolean;
   schoolRegistrationAmount?: number;
   schoolRegistrationDate?: string;
+  isExempt?: boolean; // تلميذ معفى من تسديد مبلغ الدورة
+  exemptionReason?: string;
+  missedGroupSessions?: number; // عدد الحصص الفائتة بسبب التحاقه المتأخر بالفوج (يدخلها المستخدم يدوياً)
   notes?: string;
+  autoAbsentCancelledDate?: string; // تاريخ إلغاء الغياب التلقائي لليوم لضمان المزامنة عبر قاعدة البيانات
 }
 
-export type TeacherCompensationType = 'percentage_per_student' | 'percentage_per_course' | 'fixed_per_course';
+export type TeacherCompensationType = 'percentage_per_student' | 'fixed_per_student';
 
 export interface Teacher {
   id: string;
@@ -89,9 +97,10 @@ export interface Teacher {
   email: string;
   subject: string; // Free text
   specialization: string;
-  compensationType: TeacherCompensationType; // Method of calculating payout
+  compensationType: TeacherCompensationType; // Method of calculating payout ('percentage_per_student' | 'fixed_per_student')
   commissionPercentage: number; // Agreed percentage (e.g. 60%)
-  fixedCourseRate?: number; // Fixed amount per course (e.g. 25000 DZD)
+  fixedCourseRate?: number; // Fixed amount per student (e.g. 1000 DZD per student)
+  fixedRatePerStudent?: number; // Fixed amount per student (e.g. 1000 DZD per student)
   groupsCount: number;
   totalEarned: number;
   totalPaid: number;
