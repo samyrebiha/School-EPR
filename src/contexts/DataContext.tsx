@@ -468,7 +468,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     insertTransaction: (tx: PaymentTransaction, sId?: string) => safeSupabaseCall(() => supabaseService.insertTransaction(tx, sId), 'insert_transaction', tx, sId),
     deleteTransaction: (id: string) => safeSupabaseCall(() => supabaseService.deleteTransaction(id), 'delete_transaction', id),
     upsertDebt: (d: DebtRecord, sId?: string) => safeSupabaseCall(() => supabaseService.upsertDebt(d, sId), 'upsert_debt', d, sId),
-    deleteDebt: (id: string) => safeSupabaseCall(() => supabaseService.deleteDebt(id), 'delete_debt', id),
+    deleteDebt: (id: string, sId?: string) => safeSupabaseCall(() => supabaseService.deleteDebt(id), 'delete_debt', id, sId),
     upsertExpense: (e: Expense, sId?: string) => safeSupabaseCall(() => supabaseService.upsertExpense(e, sId), 'insert_expense', e, sId),
     deleteExpense: (id: string) => safeSupabaseCall(() => supabaseService.deleteExpense(id), 'delete_expense', id),
   };
