@@ -779,7 +779,7 @@ export const Reports: React.FC = () => {
 
             <div style="background-color: #eff6ff; border: 1.5px solid #93c5fd; border-radius: 6px; padding: 8px 10px;">
               <div style="font-size: 10px; color: #1e40af; font-weight: 700; margin-bottom: 3px;">2. حق الأستاذ كامل (-)</div>
-              <div style="font-size: 15px; font-weight: 900; color: #2563eb;">-${report.teacherShare.toLocaleString('fr-DZ')} دج</div>
+              <div style="font-size: 15px; font-weight: 900; color: #2563eb;">-${report.teacherEarned.toLocaleString('fr-DZ')} دج</div>
               <div style="font-size: 8.5px; color: #3b82f6; margin-top: 2px;">إجمالي أتعاب ومستحقات الأستاذ</div>
             </div>
 

@@ -16,16 +16,21 @@ import { useSchool } from '../../contexts/SchoolContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useData } from '../../contexts/DataContext';
 import { useNetwork } from '../../contexts/NetworkContext';
+import { NotificationBell } from './NotificationBell';
 
 export interface TopbarProps {
   onOpenSearch: () => void;
   onToggleMobileSidebar: () => void;
+  onToggleDesktopSidebar?: () => void;
+  isSidebarCollapsed?: boolean;
   onNavigate?: (page: string) => void;
 }
 
 export const Topbar: React.FC<TopbarProps> = ({
   onOpenSearch,
   onToggleMobileSidebar,
+  onToggleDesktopSidebar,
+  isSidebarCollapsed,
   onNavigate,
 }) => {
   const { currentSchool } = useSchool();
@@ -81,6 +86,36 @@ export const Topbar: React.FC<TopbarProps> = ({
         >
           <Menu size={22} />
         </button>
+
+        {/* Desktop Sidebar Toggle Button */}
+        {onToggleDesktopSidebar && (
+          <button
+            type="button"
+            onClick={onToggleDesktopSidebar}
+            className="topbar-desktop-toggle"
+            title={isSidebarCollapsed ? 'توسيع القائمة الجانبية (Ctrl+B)' : 'طي القائمة الجانبية (تصغير) (Ctrl+B)'}
+            style={{
+              minWidth: '38px',
+              minHeight: '38px',
+              width: '38px',
+              height: '38px',
+              padding: 0,
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border)',
+              backgroundColor: isSidebarCollapsed ? 'var(--color-primary-light)' : 'var(--color-bg-surface-secondary)',
+              color: isSidebarCollapsed ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              flexShrink: 0,
+            }}
+            aria-label={isSidebarCollapsed ? 'توسيع القائمة الجانبية' : 'طي القائمة الجانبية'}
+          >
+            <Menu size={18} />
+          </button>
+        )}
 
         {/* Global Search trigger bar */}
         <button
@@ -332,6 +367,9 @@ export const Topbar: React.FC<TopbarProps> = ({
             <span className="sm:hidden">الإعدادات</span>
           </button>
         )}
+
+        {/* Notifications & System Updates Bell */}
+        <NotificationBell />
 
         {/* School Name Badge */}
         <div

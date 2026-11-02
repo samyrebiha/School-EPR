@@ -324,36 +324,53 @@ export const supabaseService = {
                   if (log && log.id) logsMap.set(log.id, log);
                 });
                 const mergedLogs = Array.from(logsMap.values()).sort((a, b) => {
-                  const dateA = a.date || '';
-                  const dateB = b.date || '';
-                  return dateB.localeCompare(dateA);
+                  const dateComp = (b.date || '').localeCompare(a.date || '');
+                  if (dateComp !== 0) return dateComp;
+                  const timeComp = (b.time || '').localeCompare(a.time || '');
+                  if (timeComp !== 0) return timeComp;
+                  return (b.id || '').localeCompare(a.id || '');
                 });
 
                 const isExempt = !!(lStd.isExempt || existing.isExempt);
                 const maxPaid = Math.max(existing.totalPaid || 0, lStd.totalPaid || 0);
 
                 // Renewal-aware session count and debt calculation:
-                // If a renewal/cycle-reset log exists, attendedSessions and totalDebt must represent the active cycle
-                // instead of naively taking Math.max/Math.min which would clobber new cycle records.
                 const localRenewLog = (lStd.attendanceLogs || []).find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
                 const remoteRenewLog = (existing.attendanceLogs || []).find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
                 let mergedAttended = Math.max(existing.attendedSessions || 0, lStd.attendedSessions || 0);
                 let mergedDebt = isExempt ? 0 : (lStd.totalDebt !== undefined ? lStd.totalDebt : (existing.totalDebt || 0));
 
                 if (localRenewLog || remoteRenewLog) {
-                  const renewIdx = mergedLogs.findIndex((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
-                  const currentCycleLogs = renewIdx === -1 ? mergedLogs : mergedLogs.slice(0, renewIdx);
-                  const activeCycleSessions = currentCycleLogs.filter((l) => {
-                    const st = l.status || l.type;
-                    return st === 'present' || st === 'absent_counted' || st === 'single_session';
-                  }).length;
+                  const latestRenewLog = mergedLogs.find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
+                  let activeCycleSessions = 0;
+                  if (latestRenewLog) {
+                    const renewDate = latestRenewLog.date || '';
+                    const renewTime = latestRenewLog.time || '';
+                    activeCycleSessions = mergedLogs.filter((l) => {
+                      if (!l) return false;
+                      const st = l.status || l.type;
+                      const isSession = st === 'present' || st === 'absent_counted' || st === 'single_session';
+                      if (!isSession) return false;
+                      const logDate = l.date || '';
+                      if (logDate > renewDate) return true;
+                      if (logDate === renewDate) {
+                        return (
+                          l.sessionNumber === 1 ||
+                          l.notes?.includes('مجدد') ||
+                          l.notes?.includes('الدورة الجديدة') ||
+                          (l.time || '') >= renewTime
+                        );
+                      }
+                      return false;
+                    }).length;
+                  }
 
                   if (localRenewLog && !remoteRenewLog) {
-                    // Local side has a newer renewal that remote has not seen yet -> trust local attended sessions & debt
+                    // Local side has a newer renewal that remote has not seen yet -> local is source of truth
                     mergedAttended = Math.max(lStd.attendedSessions || 0, activeCycleSessions);
                     if (!isExempt) mergedDebt = lStd.totalDebt !== undefined ? lStd.totalDebt : 0;
                   } else if (remoteRenewLog && !localRenewLog) {
-                    // Remote side has a newer renewal that local has not seen yet -> trust remote attended sessions & debt
+                    // Remote side has a newer renewal that local has not seen yet -> remote is source of truth
                     mergedAttended = Math.max(existing.attendedSessions || 0, activeCycleSessions);
                     if (!isExempt) mergedDebt = existing.totalDebt !== undefined ? existing.totalDebt : 0;
                   } else {
@@ -374,15 +391,20 @@ export const supabaseService = {
                   if (mergedDebt === 999999) mergedDebt = 0;
                 }
 
+                const baseStd = (remoteRenewLog && !localRenewLog)
+                  ? { ...lStd, ...existing }
+                  : { ...existing, ...lStd };
+
                 const mergedCandidate: Student = {
-                  ...existing,
-                  ...lStd,
+                  ...baseStd,
                   isExempt,
                   totalPaid: maxPaid,
                   totalDebt: mergedDebt,
                   attendanceLogs: mergedLogs,
                   attendedSessions: mergedAttended,
-                  totalSessions: lStd.totalSessions || existing.totalSessions || 5,
+                  totalSessions: (remoteRenewLog && !localRenewLog)
+                    ? (existing.totalSessions || lStd.totalSessions || 4)
+                    : (lStd.totalSessions || existing.totalSessions || 4),
                 };
 
                 mergedMap.set(lStd.id, reconcileStudentFinancials(mergedCandidate, course.monthlyPrice));

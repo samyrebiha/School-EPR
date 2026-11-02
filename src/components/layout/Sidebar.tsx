@@ -14,13 +14,15 @@ import {
 } from 'lucide-react';
 import { useSchool } from '../../contexts/SchoolContext';
 import { useAuth } from '../../contexts/AuthContext';
-import { LogOut, ShieldAlert, UserCheck } from 'lucide-react';
+import { LogOut, ShieldAlert, UserCheck, ChevronRight, ChevronLeft } from 'lucide-react';
 
 export interface SidebarProps {
   activePage: string;
   onNavigate: (page: string) => void;
   isOpenMobile: boolean;
   onCloseMobile: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 interface NavItem {
@@ -39,6 +41,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNavigate,
   isOpenMobile,
   onCloseMobile,
+  isCollapsed = false,
+  onToggleCollapse,
 }) => {
   const { currentSchool } = useSchool();
   const { isReceptionMode, isAdminMode, switchToReception } = useAuth();
@@ -150,41 +154,62 @@ export const Sidebar: React.FC<SidebarProps> = ({
         />
       )}
 
-      <aside className={`saas-sidebar ${isOpenMobile ? 'open' : ''}`}>
+      <aside className={`saas-sidebar ${isOpenMobile ? 'open' : ''} ${isCollapsed ? 'collapsed' : ''}`}>
         {/* Brand Header */}
         <div className="sidebar-brand">
-          <div className="brand-logo">
+          <div
+            className="brand-logo"
+            onClick={isCollapsed ? onToggleCollapse : undefined}
+            style={{ cursor: isCollapsed ? 'pointer' : 'default' }}
+            title={isCollapsed ? 'انقر لتوسيع القائمة' : currentSchool.name}
+          >
             <School size={20} />
           </div>
-          <div className="brand-text">
-            <h2>{currentSchool.name}</h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
-              <span
-                style={{
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                  padding: '1px 7px',
-                  borderRadius: '12px',
-                  backgroundColor: isReceptionMode ? 'var(--color-bg-surface-secondary)' : '#dbeafe',
-                  color: isReceptionMode ? 'var(--color-text-secondary)' : '#1e40af',
-                  border: isReceptionMode ? '1px solid var(--color-border)' : '1px solid #bfdbfe',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}
-              >
-                {isReceptionMode ? (
-                  <>
-                    <UserCheck size={11} /> مكتب الاستقبال
-                  </>
-                ) : (
-                  <>
-                    <ShieldAlert size={11} /> لوحة الإدارة
-                  </>
-                )}
-              </span>
+
+          {!isCollapsed && (
+            <div className="brand-text">
+              <h2>{currentSchool.name}</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 600,
+                    padding: '1px 7px',
+                    borderRadius: '12px',
+                    backgroundColor: isReceptionMode ? 'var(--color-bg-surface-secondary)' : '#dbeafe',
+                    color: isReceptionMode ? 'var(--color-text-secondary)' : '#1e40af',
+                    border: isReceptionMode ? '1px solid var(--color-border)' : '1px solid #bfdbfe',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  {isReceptionMode ? (
+                    <>
+                      <UserCheck size={11} /> مكتب الاستقبال
+                    </>
+                  ) : (
+                    <>
+                      <ShieldAlert size={11} /> لوحة الإدارة
+                    </>
+                  )}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Collapse/Expand Toggle Button (Desktop) */}
+          {onToggleCollapse && (
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              className="sidebar-collapse-btn"
+              title={isCollapsed ? 'توسيع القائمة الجانبية (Ctrl+B)' : 'طي القائمة الجانبية (Ctrl+B)'}
+              aria-label={isCollapsed ? 'توسيع القائمة الجانبية' : 'طي القائمة الجانبية'}
+            >
+              {isCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+            </button>
+          )}
         </div>
 
         {/* Navigation List */}
@@ -204,6 +229,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onNavigate(item.id);
                       onCloseMobile();
                     }}
+                    title={item.label}
                   >
                     <span className="nav-item-icon">{item.icon}</span>
                     <span className="nav-item-text">{item.label}</span>
@@ -217,7 +243,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Footer */}
         <div
           style={{
-            padding: 'var(--space-3) var(--space-4)',
+            padding: isCollapsed ? 'var(--space-2) var(--space-1)' : 'var(--space-3) var(--space-4)',
             borderTop: '1px solid var(--color-border)',
             fontSize: '0.75rem',
             color: 'var(--color-text-muted)',
@@ -230,13 +256,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 switchToReception();
                 onNavigate('dashboard');
               }}
+              title="العودة لوضع الاستقبال"
               style={{
                 width: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '6px',
-                padding: '8px 12px',
+                padding: isCollapsed ? '8px 0' : '8px 12px',
                 backgroundColor: '#eff6ff',
                 border: '1px solid #bfdbfe',
                 borderRadius: 'var(--radius-md)',
@@ -247,10 +274,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 transition: 'all var(--transition-fast)',
               }}
             >
-              <LogOut size={14} /> العودة لوضع الاستقبال
+              <LogOut size={14} /> {!isCollapsed && 'العودة لوضع الاستقبال'}
             </button>
           ) : (
-            <div>منصة إدارة المدارس والمراكز</div>
+            <div>{!isCollapsed ? 'منصة إدارة المدارس والمراكز' : 'EPR'}</div>
           )}
         </div>
       </aside>

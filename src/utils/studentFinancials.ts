@@ -56,10 +56,24 @@ export function reconcileStudentFinancials(
   const latestRenewalIdx = logs.findIndex(
     (l) => l && (l.status === 'renewed' || l.type === 'renewed')
   );
-  const currentCycleLogs = latestRenewalIdx === -1 ? logs : logs.slice(0, latestRenewalIdx);
-  const currentCyclePaid = currentCycleLogs
-    .filter((l) => l && (l.status === 'payment' || l.type === 'payment'))
-    .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+  let currentCyclePaid = 0;
+
+  if (latestRenewalIdx !== -1) {
+    const renewalLog = logs[latestRenewalIdx];
+    const renewalDate = renewalLog?.date;
+
+    // Collect all payment logs in the active cycle (including on renewal date)
+    const cyclePaymentLogs = logs.filter((l, idx) => {
+      if (!l || (l.status !== 'payment' && l.type !== 'payment')) return false;
+      if (idx < latestRenewalIdx) return true;
+      if (renewalDate && l.date === renewalDate && (l.notes?.includes('تجديد') || l.notes?.includes('اشتراك') || l.receiptNumber)) return true;
+      return false;
+    });
+
+    currentCyclePaid = cyclePaymentLogs.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+  } else {
+    currentCyclePaid = paidFromLogs;
+  }
 
   // 5. Reconcile remaining debt
   let currentDebt = Math.max(0, Number(student.totalDebt) || 0);
@@ -70,6 +84,9 @@ export function reconcileStudentFinancials(
       currentDebt = 0;
     } else if (currentCyclePaid > 0) {
       currentDebt = Math.max(0, basePrice - currentCyclePaid);
+    } else if (actualPaid >= basePrice && currentDebt > 0 && (currentDebt + actualPaid === 3500 || basePrice <= 1500)) {
+      // Repair artifact where debt 2000 was calculated from old 3500 course price
+      currentDebt = 0;
     } else if (currentDebt <= 0 && (student.totalDebt === undefined || student.totalDebt <= 0)) {
       currentDebt = 0;
     } else {

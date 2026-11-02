@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { GlobalSearchModal } from './GlobalSearchModal';
@@ -21,7 +21,29 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('school_sidebar_collapsed') === 'true';
+  });
   const { isOnline, openOfflineModal } = useNetwork();
+
+  const toggleSidebarCollapse = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('school_sidebar_collapsed', String(next));
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        toggleSidebarCollapse();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   return (
     <div className="app-main-layout">
@@ -31,6 +53,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         onNavigate={onNavigate}
         isOpenMobile={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={toggleSidebarCollapse}
       />
 
       {/* Main Container */}
@@ -39,6 +63,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         <Topbar
           onOpenSearch={() => setIsSearchOpen(true)}
           onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+          onToggleDesktopSidebar={toggleSidebarCollapse}
+          isSidebarCollapsed={isSidebarCollapsed}
           onNavigate={onNavigate}
         />
 

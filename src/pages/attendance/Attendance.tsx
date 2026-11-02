@@ -71,17 +71,46 @@ const SessionCircles: React.FC<{ student: Student; maxCourseSessions?: number }>
   const isExceeded = attended > total;
 
   const allLogs = student.attendanceLogs || [];
+  const todayStr = new Date().toISOString().split('T')[0];
+
   // Find index of most recent renewal log to scope circles to current active package
   const latestRenewalIdx = allLogs.findIndex((l) => l.status === 'renewed');
-  const currentCycleRawLogs = latestRenewalIdx === -1 ? allLogs : allLogs.slice(0, latestRenewalIdx);
+  let currentCycleRawLogs = latestRenewalIdx === -1 ? allLogs : allLogs.slice(0, latestRenewalIdx);
+
+  // If renewed today, ensure any attendance recorded today is pulled into the current cycle
+  const renewalLog = latestRenewalIdx !== -1 ? allLogs[latestRenewalIdx] : null;
+  const isRenewedToday = renewalLog && renewalLog.date === todayStr;
+  if (isRenewedToday) {
+    const todayLogsBeforeRenewal = allLogs.slice(latestRenewalIdx + 1).filter(
+      (l) => l.date === todayStr && (l.status === 'present' || l.status === 'absent_counted' || l.status === 'single_session')
+    );
+    if (
+      todayLogsBeforeRenewal.length > 0 &&
+      !currentCycleRawLogs.some(
+        (l) => l.date === todayStr && (l.status === 'present' || l.status === 'absent_counted' || l.status === 'single_session')
+      )
+    ) {
+      currentCycleRawLogs = [...todayLogsBeforeRenewal, ...currentCycleRawLogs];
+    }
+  }
 
   // Filter ONLY real quota-consuming session attendance logs (present, absent_counted, single_session).
   // Excused absence (absent_uncounted) is a skip/pass for that day and DOES NOT consume a quota slot.
   // The slot remains an empty gray circle waiting for the next session when the student attends.
-  const sessionLogs = currentCycleRawLogs
+  const rawSessionLogs = currentCycleRawLogs
     .filter((l) => l.status === 'present' || l.status === 'absent_counted' || l.status === 'single_session')
     .slice()
     .reverse();
+
+  // Deduplicate: ensure today's date only counts at most once
+  const seenDates = new Set<string>();
+  const sessionLogs = rawSessionLogs.filter((l) => {
+    if (l.date && l.date === todayStr) {
+      if (seenDates.has(todayStr)) return false;
+      seenDates.add(todayStr);
+    }
+    return true;
+  });
 
   // All session logs in this cycle (including excused absences) to calculate total participated sessions
   const allCycleSessionLogs = currentCycleRawLogs.filter((l) => {
@@ -89,7 +118,14 @@ const SessionCircles: React.FC<{ student: Student; maxCourseSessions?: number }>
     return s === 'present' || s === 'absent_counted' || s === 'absent_uncounted' || s === 'single_session';
   });
 
-  const studentCycleProgress = Math.max(attended, allCycleSessionLogs.length);
+  const hadAttendanceToday = (allLogs || []).some(
+    (l) => l.date === todayStr && (l.status === 'present' || l.status === 'single_session')
+  );
+
+  // Effective attended sessions: exactly matches the deduplicated quota count, guaranteed >= 1 if attended today
+  const effectiveAttended = Math.max(attended, sessionLogs.length, hadAttendanceToday ? 1 : 0);
+
+  const studentCycleProgress = Math.max(effectiveAttended, allCycleSessionLogs.length);
   // Missed sessions entered explicitly by user (e.g. 1 or 2)
   const missedGroupSessions = student.missedGroupSessions || 0;
 
@@ -98,7 +134,7 @@ const SessionCircles: React.FC<{ student: Student; maxCourseSessions?: number }>
   const singleSessionCount = sessionLogs.filter((l) => l.status === 'single_session').length;
   const absentUncounted = excusedLogs.length;
 
-  const consumedCount = Math.max(attended, sessionLogs.length);
+  const consumedCount = Math.max(effectiveAttended, sessionLogs.length);
   const slotsCount = Math.max(total, consumedCount);
 
   const circles = [];
@@ -153,12 +189,12 @@ const SessionCircles: React.FC<{ student: Student; maxCourseSessions?: number }>
           boxShadow: '0 2px 5px rgba(16, 185, 129, 0.35)',
         });
       }
-    } else if (i < attended) {
-      // Carried over overage session from previous package or legacy record
+    } else if (i < effectiveAttended) {
+      // Carried over session or today's recorded session
       circles.push({
         type: 'present',
         icon: '✓',
-        tooltip: `حصة ${i + 1}: حصة مستهلكة مرحّلة من التجاوز السابق`,
+        tooltip: `حصة ${i + 1}: حضور مسجل${i === 0 && hadAttendanceToday ? ' (اليوم)' : ''}`,
         bgColor: '#10b981',
         borderColor: '#059669',
         textColor: '#ffffff',
@@ -219,7 +255,7 @@ const SessionCircles: React.FC<{ student: Student; maxCourseSessions?: number }>
             fontFamily: 'monospace',
           }}
         >
-          {attended} / {total} حصص
+          {effectiveAttended} / {total} حصص
         </span>
 
         {missedGroupSessions > 0 && (
@@ -343,8 +379,6 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
     incrementStudentSession,
     recordStudentAbsence,
     recordBatchAbsence,
-    revertTodayAutoAbsence,
-    clearTodayAutoAbsentCancellation,
     renewStudentSubscription,
     undoStudentAttendance,
     recordSingleSessionAttendance,
@@ -554,30 +588,10 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
     return !isStudentAttendedToday(std) && !isStudentAbsentToday(std);
   };
 
-  // Batch absence & auto-mark end-of-day absent states
-  const [autoMarkAbsentsEndOfDay, setAutoMarkAbsentsEndOfDay] = useState<boolean>(() => {
-    return localStorage.getItem('school_auto_mark_absent_end_of_day') === 'true';
-  });
-
-  const toggleAutoMarkAbsentsEndOfDay = () => {
-    const nextVal = !autoMarkAbsentsEndOfDay;
-    setAutoMarkAbsentsEndOfDay(nextVal);
-    localStorage.setItem('school_auto_mark_absent_end_of_day', String(nextVal));
-    if (nextVal) {
-      success('تم تفعيل خاصية احتساب الغياب تلقائياً بنهاية اليوم لمن لم يأتِ.', 'الغياب التلقائي');
-    } else {
-      warning('تم تعطيل خاصية احتساب الغياب التلقائي.', 'الغياب التلقائي');
-    }
-  };
-
+  // Manual batch absence modal states
   const [isBatchAbsenceModalOpen, setIsBatchAbsenceModalOpen] = useState(false);
   const [batchAbsenceIsCounted, setBatchAbsenceIsCounted] = useState(true);
   const [batchAbsenceNote, setBatchAbsenceNote] = useState('');
-
-  // Revert auto-absence for today states
-  const [isRevertAutoAbsenceModalOpen, setIsRevertAutoAbsenceModalOpen] = useState(false);
-  const [selectedRevertStudentIds, setSelectedRevertStudentIds] = useState<string[]>([]);
-  const [isRevertingAutoAbsence, setIsRevertingAutoAbsence] = useState(false);
 
   // Single session student: registered as single session or has single session attendance logs without full course subscription
   const isStudentSingleSession = (std: Student) => {
@@ -639,67 +653,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
   const partialDebtorsCount = enrolledList.filter(isStudentPartialDebtor).length;
   const singleSessionStudentsCount = enrolledList.filter(isStudentSingleSession).length;
 
-  // Students who have an absence log recorded for today (target for auto-absent removal)
-  const autoAbsentTodayStudents = useMemo(() => {
-    if (!activeCourse) return [];
-    return (activeCourse.enrolledList || []).filter((std) =>
-      (std.attendanceLogs || []).some(
-        (l) =>
-          l.date === todayDateStr &&
-          (l.status === 'absent_counted' ||
-            l.status === 'absent_uncounted' ||
-            l.type === 'absent_counted' ||
-            l.type === 'absent_uncounted')
-      )
-    );
-  }, [activeCourse, todayDateStr]);
-  const autoAbsentTodayCount = autoAbsentTodayStudents.length;
 
-  // Check if auto-absence was cancelled/reverted for today in the database or locally
-  const isAutoAbsentCancelledToday = useMemo(() => {
-    if (!activeCourse) return false;
-    const localKey = localStorage.getItem(`auto_marked_absent_${activeCourse.id}_${todayDateStr}`);
-    if (localKey === 'cancelled') return true;
-    return (activeCourse.enrolledList || []).some(
-      (s: any) => s.autoAbsentCancelledDate === todayDateStr
-    );
-  }, [activeCourse, todayDateStr]);
-
-  const handleOpenRevertAutoAbsenceModal = () => {
-    if (!activeCourse) return;
-    setSelectedRevertStudentIds(autoAbsentTodayStudents.map((s) => s.id));
-    setIsRevertAutoAbsenceModalOpen(true);
-  };
-
-  const handleExecuteRevertAutoAbsence = () => {
-    if (!activeCourse || selectedRevertStudentIds.length === 0) return;
-
-    setIsRevertingAutoAbsence(true);
-    try {
-      const res = revertTodayAutoAbsence(activeCourse.id, selectedRevertStudentIds);
-      setIsRevertAutoAbsenceModalOpen(false);
-
-      if (res.count > 0) {
-        success(
-          `تم التراجع عن الغياب التلقائي لـ ${res.count} تلميذ لليوم بنجاح، وحفظ التعديلات في قاعدة البيانات ومزامنتها على جميع الأجهزة!`,
-          'تراجع الغياب التلقائي'
-        );
-      } else {
-        warning('لم يتم العثور على تسجيلات غياب تلقائي لليوم للتراجع عنها.', 'تنبيه');
-      }
-    } finally {
-      setIsRevertingAutoAbsence(false);
-    }
-  };
-
-  const handleResetAutoAbsentCancellation = () => {
-    if (!activeCourse) return;
-    clearTodayAutoAbsentCancellation(activeCourse.id);
-    success(
-      `تمت إعادة تفعيل إمكانية احتساب الغياب التلقائي لفوج "${activeCourse.title}" لليوم في قاعدة البيانات.`,
-      'إعادة تفعيل الغياب التلقائي'
-    );
-  };
 
   const handleExecuteBatchAbsence = () => {
     if (!activeCourse || pendingTodayStudents.length === 0) return;
@@ -728,50 +682,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
     }
   };
 
-  // Auto-mark absent at end of day if enabled
-  useEffect(() => {
-    if (!autoMarkAbsentsEndOfDay || !activeCourse || pendingTodayStudents.length === 0) return;
 
-    // If auto-absence was cancelled/reverted for today in database, DO NOT auto-mark again on ANY device!
-    if (isAutoAbsentCancelledToday) return;
-
-    const autoKey = `auto_marked_absent_${activeCourse.id}_${todayDateStr}`;
-    if (localStorage.getItem(autoKey)) return;
-
-    const isTodayScheduled = !activeCourse.scheduleDays || activeCourse.scheduleDays.length === 0 || activeCourse.scheduleDays.includes(todayDayName);
-    if (!isTodayScheduled) return;
-
-    const now = new Date();
-    const currentHour = now.getHours();
-
-    let shouldAutoMark = currentHour >= 19;
-
-    if (!shouldAutoMark && activeCourse.scheduleTime) {
-      const match = activeCourse.scheduleTime.match(/(\d{1,2}):(\d{2})\s*$/);
-      if (match) {
-        const endHour = parseInt(match[1], 10);
-        const endMin = parseInt(match[2], 10);
-        if (currentHour > endHour || (currentHour === endHour && now.getMinutes() >= endMin + 15)) {
-          shouldAutoMark = true;
-        }
-      }
-    }
-
-    if (shouldAutoMark) {
-      localStorage.setItem(autoKey, 'true');
-      const studentIds = pendingTodayStudents.map((s) => s.id);
-      const res = recordBatchAbsence(
-        activeCourse.id,
-        studentIds,
-        true,
-        'احتساب غياب تلقائي بنهاية اليوم (لم يحضر الحصة)'
-      );
-      success(
-        `تم احتساب الغياب تلقائياً بنهاية اليوم لـ ${res.count} تلميذ لم يحضروا في فوج "${activeCourse.title}".`,
-        'الغياب التلقائي المبرمج'
-      );
-    }
-  }, [autoMarkAbsentsEndOfDay, activeCourse, pendingTodayStudents, todayDateStr, todayDayName, isAutoAbsentCancelledToday]);
 
   const filteredStudents = useMemo(() => {
     let list = enrolledList.slice();
@@ -1178,8 +1089,11 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
 
   // Renew Subscription Modal State
   const [studentToRenew, setStudentToRenew] = useState<Student | null>(null);
-  const [renewSessionsCount, setRenewSessionsCount] = useState('5');
-  const [renewPaidAmount, setRenewPaidAmount] = useState('6000');
+  const [renewSessionsCount, setRenewSessionsCount] = useState('4');
+  const [renewCoursePrice, setRenewCoursePrice] = useState('1500');
+  const [renewPaidAmount, setRenewPaidAmount] = useState('1500');
+  const [renewMarkTodayAttended, setRenewMarkTodayAttended] = useState(true);
+  const [isRenewSubmitting, setIsRenewSubmitting] = useState(false);
 
   // Simple Renewal Receipt State
   interface RenewalReceiptData {
@@ -1622,8 +1536,18 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
         ? activeCourse.totalSessionsDefault
         : 4;
 
+    const basePrice =
+      student.coursePrice !== undefined && student.coursePrice > 0
+        ? student.coursePrice
+        : activeCourse?.monthlyPrice && activeCourse.monthlyPrice > 0
+        ? activeCourse.monthlyPrice
+        : 1500;
+
     setRenewSessionsCount(String(defaultSessions));
-    setRenewPaidAmount(String(activeCourse?.monthlyPrice || 6000));
+    setRenewCoursePrice(String(basePrice));
+    setRenewPaidAmount(String(basePrice));
+    setRenewMarkTodayAttended(true);
+    setIsRenewSubmitting(false);
   };
 
   // Single Session Attendance Modal State
@@ -2392,53 +2316,54 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
   // Execute Subscription Renewal & Automatically Deduct Overages
   const handleRenew = (e: React.FormEvent, shouldPrint: boolean = false) => {
     e.preventDefault();
-    if (!studentToRenew || !activeCourse) return;
+    if (!studentToRenew || !activeCourse || isRenewSubmitting) return;
 
-    const defaultSessions =
-      studentToRenew.totalSessions && studentToRenew.totalSessions > 0
-        ? studentToRenew.totalSessions
-        : activeCourse.totalSessionsDefault && activeCourse.totalSessionsDefault > 0
-        ? activeCourse.totalSessionsDefault
-        : 4;
+    setIsRenewSubmitting(true);
+    try {
+      const defaultSessions =
+        studentToRenew.totalSessions && studentToRenew.totalSessions > 0
+          ? studentToRenew.totalSessions
+          : activeCourse.totalSessionsDefault && activeCourse.totalSessionsDefault > 0
+          ? activeCourse.totalSessionsDefault
+          : 4;
 
-    const newPackageSessions = Number(renewSessionsCount) || defaultSessions;
-    const paidVal = Number(renewPaidAmount) || 0;
+      const newPackageSessions = Number(renewSessionsCount) || defaultSessions;
+      const customPrice = Number(renewCoursePrice) || studentToRenew.coursePrice || activeCourse.monthlyPrice || 1500;
+      const paidVal = Number(renewPaidAmount) || 0;
 
-    const coursePrice =
-      studentToRenew.coursePrice !== undefined && studentToRenew.coursePrice > 0
-        ? studentToRenew.coursePrice
-        : activeCourse.monthlyPrice || 6000;
+      if (customPrice > 0 && paidVal > customPrice) {
+        warning(
+          `المبلغ المسدد (${formatDZD(paidVal)}) لا يمكن أن يتجاوز سعر الدورة المحدد (${formatDZD(customPrice)}) كحد أقصى لتجنب الأخطاء.`,
+          'تجاوز مبلغ الدورة'
+        );
+        setIsRenewSubmitting(false);
+        return;
+      }
 
-    if (coursePrice > 0 && paidVal > coursePrice) {
-      warning(
-        `المبلغ المسدد (${formatDZD(paidVal)}) لا يمكن أن يتجاوز مبلغ الدورة (${formatDZD(coursePrice)}) كحد أقصى لتجنب الأخطاء.`,
-        'تجاوز مبلغ الدورة'
+      const res = renewStudentSubscription(
+        activeCourse.id,
+        studentToRenew.id,
+        newPackageSessions,
+        paidVal,
+        customPrice,
+        renewMarkTodayAttended
       );
-      return;
-    }
 
-    const res = renewStudentSubscription(
-      activeCourse.id,
-      studentToRenew.id,
-      newPackageSessions,
-      paidVal
-    );
+      const receiptData: RenewalReceiptData = {
+        receiptNumber: res.receiptNumber,
+        studentName: studentToRenew.fullName,
+        studentPhone: studentToRenew.phone,
+        courseTitle: activeCourse.title,
+        teacherName: activeCourse.teacherName,
+        sessionsCount: newPackageSessions,
+        overageDeducted: res.overageDeducted,
+        startingAttended: res.startingAttended,
+        paidAmount: paidVal,
+        remainingDebt: res.addedDebt,
+        date: new Date().toISOString().split('T')[0],
+      };
 
-    const receiptData: RenewalReceiptData = {
-      receiptNumber: res.receiptNumber,
-      studentName: studentToRenew.fullName,
-      studentPhone: studentToRenew.phone,
-      courseTitle: activeCourse.title,
-      teacherName: activeCourse.teacherName,
-      sessionsCount: newPackageSessions,
-      overageDeducted: res.overageDeducted,
-      startingAttended: res.startingAttended,
-      paidAmount: paidVal,
-      remainingDebt: res.addedDebt,
-      date: new Date().toISOString().split('T')[0],
-    };
-
-    setStudentToRenew(null);
+      setStudentToRenew(null);
 
     if (shouldPrint) {
       handlePrintSimpleRenewalReceipt(receiptData);
@@ -2453,10 +2378,219 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
       );
     } else {
       success(
-        `تم تجديد اشتراك التلميذ "${studentToRenew.fullName}" بـ ${newPackageSessions} حصص جديدة بنجاح! رقم الوصل: ${res.receiptNumber}`,
+        `تم تجديد اشتراك التلميذ "${studentToRenew.fullName}" بـ ${newPackageSessions} حصص جديدة بنجاح! رصيد الحصص: ${res.startingAttended}/${newPackageSessions}. رقم الوصل: ${res.receiptNumber}`,
         'تم التجديد'
       );
     }
+  } finally {
+    setIsRenewSubmitting(false);
+  }
+};
+
+  // Direct 1-Click Print / Export Course Attendance Sheet (PDF)
+  const handlePrintCourseAttendanceSheet = () => {
+    if (!activeCourse) return;
+
+    const printWin = window.open('', '_blank', 'width=900,height=1000');
+    if (!printWin) {
+      alert('يرجى السماح بالنوافذ المنبثقة لطباعة كشف الحضور.');
+      return;
+    }
+
+    const schoolName = currentSchool?.name || 'مدرستي التعليمية';
+    const now = new Date();
+    const todayAr = formatDateArabic(todayDateStr);
+    const nowTime = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const enrolled = activeCourse.enrolledList || [];
+
+    const totalStudents = enrolled.length;
+    const attendedCount = enrolled.filter(isStudentAttendedToday).length;
+    const absentCount = enrolled.filter(isStudentAbsentToday).length;
+    const pendingCount = enrolled.filter(isStudentPendingToday).length;
+    const totalConsumed = enrolled.reduce((acc, s) => acc + (s.attendedSessions || 0), 0);
+
+    const rowsHtml = enrolled
+      .map((std, idx) => {
+        const logs = std.attendanceLogs || [];
+        const latestRenewalIdx = logs.findIndex((l) => l.status === 'renewed' || l.type === 'renewed');
+        const currentLogs = latestRenewalIdx === -1 ? logs : logs.slice(0, latestRenewalIdx);
+
+        const attended = std.attendedSessions || 0;
+        const total = std.totalSessions || activeCourse.totalSessionsDefault || 4;
+        const isAttendedToday = isStudentAttendedToday(std);
+        const isAbsentToday = isStudentAbsentToday(std);
+        const isExceeded = attended > total;
+        const missedGroupSessions = std.missedGroupSessions || 0;
+
+        // Visual session boxes
+        const boxesCount = Math.max(total, attended);
+        const boxesHtml: string[] = [];
+        for (let i = 0; i < boxesCount; i++) {
+          if (i < attended) {
+            boxesHtml.push(
+              `<span style="width: 19px; height: 19px; border: 1.5px solid #1e293b; border-radius: 3px; background-color: #f0fdf4; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900; color: #15803d; flex-shrink: 0;" title="حصة مستهلكة">✓</span>`
+            );
+          } else {
+            boxesHtml.push(
+              `<span style="width: 19px; height: 19px; border: 1.5px dashed #94a3b8; border-radius: 3px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;" title="حصة متبقية"></span>`
+            );
+          }
+        }
+
+        // Attendance & absence log dates
+        const presentDates = currentLogs
+          .filter((l) => l.status === 'present' || l.type === 'present' || l.status === 'single_session')
+          .map((l) => (l.date ? formatDateArabic(l.date) : ''))
+          .filter(Boolean);
+
+        const absentCountedDates = currentLogs
+          .filter((l) => l.status === 'absent_counted' || l.type === 'absent_counted')
+          .map((l) => (l.date ? formatDateArabic(l.date) : ''))
+          .filter(Boolean);
+
+        const absentUncountedDates = currentLogs
+          .filter((l) => l.status === 'absent_uncounted' || l.type === 'absent_uncounted')
+          .map((l) => (l.date ? formatDateArabic(l.date) : ''))
+          .filter(Boolean);
+
+        return `
+        <tr style="border-bottom: 1px solid #cbd5e1; background-color: ${
+          isAttendedToday ? '#f0fdf4' : isAbsentToday ? '#fef2f2' : idx % 2 === 0 ? '#ffffff' : '#f8fafc'
+        };">
+          <td style="padding: 6px 5px; text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${idx + 1}</td>
+          <td style="padding: 6px 8px; font-weight: bold; font-size: 11.5px; border: 1px solid #cbd5e1;">
+            ${std.fullName}
+            ${missedGroupSessions > 0 ? `<div style="font-size: 9px; color: #b45309; font-weight: normal; margin-top: 1px;">⚠️ التحاق متأخر (فاتته ${missedGroupSessions} حصص)</div>` : ''}
+            ${std.isExempt ? `<span style="font-size: 8.5px; background: #fef3c7; color: #92400e; padding: 1px 4px; border-radius: 3px; margin-right: 4px;">تلميذ معفى</span>` : ''}
+          </td>
+          <td style="padding: 6px 6px; font-family: monospace; font-size: 10.5px; text-align: center; border: 1px solid #cbd5e1; direction: ltr;">
+            ${std.phone ? formatAlgerianPhone(std.phone) : (std.cardId ? `بطاقة: ${std.cardId}` : '—')}
+          </td>
+          <td style="padding: 6px 6px; text-align: center; border: 1px solid #cbd5e1;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 3px; flex-wrap: wrap;">
+              ${boxesHtml.join('')}
+            </div>
+            <div style="font-size: 10.5px; font-weight: 800; font-family: monospace; color: ${isExceeded ? '#dc2626' : '#0f172a'}; margin-top: 2px;">
+              ${attended} / ${total} حصص
+              ${isExceeded ? `<span style="color: #dc2626; font-size: 9px; background: #fee2e2; padding: 1px 3px; border-radius: 3px; margin-right: 2px;">+${attended - total}</span>` : ''}
+            </div>
+          </td>
+          <td style="padding: 6px 6px; text-align: center; border: 1px solid #cbd5e1; font-size: 10.5px;">
+            ${
+              isAttendedToday
+                ? `<span style="color: #15803d; font-weight: 800; background: #dcfce7; padding: 2px 6px; border-radius: 4px; border: 1px solid #86efac; display: inline-block;">✓ حاضر اليوم</span>`
+                : isAbsentToday
+                ? `<span style="color: #b91c1c; font-weight: 800; background: #fee2e2; padding: 2px 6px; border-radius: 4px; border: 1px solid #fca5a5; display: inline-block;">✗ غائب اليوم</span>`
+                : `<span style="color: #64748b; font-weight: 600;">— في الانتظار</span>`
+            }
+          </td>
+          <td style="padding: 6px 8px; font-size: 9.5px; color: #334155; line-height: 1.4; border: 1px solid #cbd5e1;">
+            ${presentDates.length > 0 ? `<div><strong style="color: #15803d;">حضور (${presentDates.length}):</strong> ${presentDates.join('، ')}</div>` : ''}
+            ${absentCountedDates.length > 0 ? `<div><strong style="color: #dc2626;">غياب محسوب (${absentCountedDates.length}):</strong> ${absentCountedDates.join('، ')}</div>` : ''}
+            ${absentUncountedDates.length > 0 ? `<div><strong style="color: #ea580c;">غياب معفى (${absentUncountedDates.length}):</strong> ${absentUncountedDates.join('، ')}</div>` : ''}
+            ${presentDates.length === 0 && absentCountedDates.length === 0 && absentUncountedDates.length === 0 ? '<span style="color: #94a3b8;">لا توجد حصص مسجلة بعد</span>' : ''}
+          </td>
+          <td style="padding: 6px 6px; text-align: center; width: 85px; border: 1px solid #cbd5e1;"></td>
+        </tr>
+      `;
+      })
+      .join('');
+
+    printWin.document.write(`
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ar">
+      <head>
+        <meta charset="utf-8">
+        <title>كشف الحضور ومتابعة الحصص - ${activeCourse.title}</title>
+        <style>
+          @page { size: A4 portrait; margin: 10mm; }
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 4px; direction: rtl; color: #0f172a; font-size: 11px; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
+          .title { font-size: 17px; font-weight: 900; color: #0f172a; margin: 0; }
+          .subtitle { font-size: 12px; font-weight: 700; color: #2563eb; margin-top: 2px; }
+          .meta-box { text-align: left; font-size: 10px; color: #475569; }
+          .info-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 11px; }
+          .info-item b { color: #0f172a; font-weight: 800; }
+          .stats-strip { display: flex; justify-content: space-between; align-items: center; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px 12px; margin-bottom: 8px; font-size: 10.5px; font-weight: 700; color: #1e3a8a; }
+          table { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 10.5px; border: 1.5px solid #0f172a; }
+          th { background-color: #0f172a; color: #ffffff; padding: 7px 5px; font-weight: 800; text-align: center; font-size: 10.5px; border: 1px solid #334155; }
+          td { border: 1px solid #cbd5e1; }
+          .footer { margin-top: 18px; display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; padding: 0 16px; page-break-inside: avoid; }
+          .sig-box { border: 1px dashed #94a3b8; border-radius: 6px; padding: 8px 16px; min-width: 170px; text-align: center; }
+          @media print {
+            body { padding: 0; }
+            button { display: none !important; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <div class="title">${schoolName}</div>
+            <div class="subtitle">كشف الحضور الرسمي ومتابعة استهلاك الحصص (فوج الأستاذ)</div>
+          </div>
+          <div class="meta-box">
+            <div>التاريخ: <strong>${todayAr}</strong></div>
+            <div>توقيت الاستخراج: <strong>${nowTime}</strong></div>
+          </div>
+        </div>
+
+        <div class="info-grid">
+          <div class="info-item"><b>الأستاذ:</b> ${activeCourse.teacherName}</div>
+          <div class="info-item"><b>المادة:</b> ${activeCourse.subject || '—'}</div>
+          <div class="info-item"><b>الفوج:</b> ${activeCourse.title}</div>
+          <div class="info-item"><b>المستوى:</b> ${activeCourse.academicLevel || 'عام'}</div>
+          <div class="info-item"><b>القاعة:</b> ${activeCourse.roomName || '—'}</div>
+          <div class="info-item"><b>التوقيت:</b> ${activeCourse.scheduleTime || '—'}</div>
+          <div class="info-item"><b>الأيام:</b> ${(activeCourse.scheduleDays || []).join(' • ') || '—'}</div>
+          <div class="info-item"><b>سعة الباقة:</b> ${activeCourse.totalSessionsDefault || 4} حصص</div>
+        </div>
+
+        <div class="stats-strip">
+          <div>👥 إجمالي التلاميذ: <strong>${totalStudents}</strong></div>
+          <div>✅ حاضرون اليوم: <strong style="color: #15803d;">${attendedCount}</strong></div>
+          <div>❌ غائبون اليوم: <strong style="color: #b91c1c;">${absentCount}</strong></div>
+          <div>⏳ لم يحضروا بعد: <strong style="color: #d97706;">${pendingCount}</strong></div>
+          <div>📊 مجموع الحصص المستهلكة: <strong>${totalConsumed} حصة</strong></div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30px;">#</th>
+              <th style="text-align: right; width: 160px;">اسم ولقب التلميذ</th>
+              <th style="width: 100px;">الهاتف / البطاقة</th>
+              <th style="width: 130px;">استهلاك الحصص</th>
+              <th style="width: 95px;">حالة اليوم</th>
+              <th>سجل الحصص المحضورة والغيابات</th>
+              <th style="width: 85px;">ملاحظة وتوقيع</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+
+        <div class="footer">
+          <div class="sig-box">
+            <div>ختم وملاحظات الإدارة</div>
+            <div style="margin-top: 26px; color: #94a3b8;">................................</div>
+          </div>
+          <div class="sig-box">
+            <div>توقيع الأستاذ المؤطر (${activeCourse.teacherName})</div>
+            <div style="margin-top: 26px; color: #94a3b8;">................................</div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = function() {
+            window.print();
+          };
+        </script>
+      </body>
+      </html>
+    `);
+    printWin.document.close();
   };
 
   const totalEnrolled = activeCourse?.enrolledList?.length || 0;
@@ -2471,14 +2605,31 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
         description="تسجيل الحضور بنقرة زر، تنبيهات تجاوز الحصص، وإعادة تجديد الاشتراكات مع اقتطاع التجاوزات تلقائياً"
         actions={
           activeCourse ? (
-            <Button
-              variant="primary"
-              size="sm"
-              rightIcon={<UserPlus size={15} />}
-              onClick={handleOpenEnrollModal}
-            >
-              + إضافة تلميذ
-            </Button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <Button
+                variant="outline"
+                size="sm"
+                rightIcon={<Printer size={15} />}
+                onClick={handlePrintCourseAttendanceSheet}
+                title="طباعة / تصدير كشف الحضور ومتابعة استهلاك الحصص مباشرة كملف PDF"
+                style={{
+                  backgroundColor: '#ffffff',
+                  color: '#0f172a',
+                  fontWeight: 700,
+                  borderColor: '#cbd5e1',
+                }}
+              >
+                كشف الحضور (PDF)
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                rightIcon={<UserPlus size={15} />}
+                onClick={handleOpenEnrollModal}
+              >
+                + إضافة تلميذ
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -3160,97 +3311,24 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                   </Button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={toggleAutoMarkAbsentsEndOfDay}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 12px',
-                    borderRadius: '8px',
-                    border: autoMarkAbsentsEndOfDay ? '1.5px solid #16a34a' : '1px solid #cbd5e1',
-                    backgroundColor: autoMarkAbsentsEndOfDay ? '#f0fdf4' : '#ffffff',
-                    color: autoMarkAbsentsEndOfDay ? '#15803d' : '#64748b',
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                  }}
-                  title="إذا انتهى اليوم ولم يسجل التلميذ حضوراً، يُحتسب له غياب محسوب تلقائياً"
-                >
-                  <Clock size={13} color={autoMarkAbsentsEndOfDay ? '#16a34a' : '#64748b'} />
-                  <span>احتساب الغياب التلقائي:</span>
-                  <span
-                    style={{
-                      padding: '1px 6px',
-                      borderRadius: '10px',
-                      backgroundColor: autoMarkAbsentsEndOfDay ? '#16a34a' : '#94a3b8',
-                      color: '#ffffff',
-                      fontSize: '0.6875rem',
-                      fontWeight: 800,
-                    }}
-                  >
-                    {autoMarkAbsentsEndOfDay ? 'مفعّل ⚡' : 'معطّل'}
-                  </span>
-                </button>
 
-                {/* Button: Revert / Remove Auto-Absence for today */}
+
                 {activeCourse && (
                   <Button
-                    type="button"
-                    variant="secondary"
+                    variant="outline"
                     size="sm"
-                    rightIcon={<RotateCcw size={14} />}
-                    onClick={handleOpenRevertAutoAbsenceModal}
-                    disabled={autoAbsentTodayCount === 0 && !isAutoAbsentCancelledToday}
+                    rightIcon={<Printer size={14} />}
+                    onClick={handlePrintCourseAttendanceSheet}
                     style={{
                       whiteSpace: 'nowrap',
-                      backgroundColor: autoAbsentTodayCount > 0 ? '#fff7ed' : isAutoAbsentCancelledToday ? '#f0fdf4' : '#f8fafc',
-                      borderColor: autoAbsentTodayCount > 0 ? '#ea580c' : isAutoAbsentCancelledToday ? '#16a34a' : '#cbd5e1',
-                      color: autoAbsentTodayCount > 0 ? '#c2410c' : isAutoAbsentCancelledToday ? '#15803d' : '#94a3b8',
+                      backgroundColor: '#ffffff',
+                      color: '#0f172a',
+                      borderColor: '#cbd5e1',
                       fontWeight: 700,
-                      boxShadow: autoAbsentTodayCount > 0 ? '0 1px 3px rgba(234, 88, 12, 0.25)' : 'none',
                     }}
-                    title={
-                      autoAbsentTodayCount > 0
-                        ? `إزالة الغائب التلقائي / تراجع غياب التلقائي لليوم (${autoAbsentTodayCount} تلاميذ)`
-                        : isAutoAbsentCancelledToday
-                        ? 'تم التراجع عن الغياب التلقائي لليوم (مسجل في قاعدة البيانات ومزامن)'
-                        : 'لا يوجد تلاميذ مسجلين كغياب تلقائي لليوم'
-                    }
+                    title="طباعة / تصدير كشف الحضور ومتابعة استهلاك الحصص مباشرة كملف PDF"
                   >
-                    <span>تراجع الغياب التلقائي (اليوم)</span>
-                    {autoAbsentTodayCount > 0 && (
-                      <span
-                        style={{
-                          marginRight: '4px',
-                          padding: '1px 6px',
-                          borderRadius: '10px',
-                          backgroundColor: '#ea580c',
-                          color: '#ffffff',
-                          fontSize: '0.6875rem',
-                          fontWeight: 800,
-                        }}
-                      >
-                        {autoAbsentTodayCount}
-                      </span>
-                    )}
-                    {isAutoAbsentCancelledToday && autoAbsentTodayCount === 0 && (
-                      <span
-                        style={{
-                          marginRight: '4px',
-                          padding: '1px 6px',
-                          borderRadius: '10px',
-                          backgroundColor: '#16a34a',
-                          color: '#ffffff',
-                          fontSize: '0.6875rem',
-                          fontWeight: 700,
-                        }}
-                      >
-                        تم الإلغاء ✓
-                      </span>
-                    )}
+                    كشف الحضور (PDF)
                   </Button>
                 )}
 
@@ -5297,254 +5375,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
         </div>
       </Modal>
 
-      {/* Revert / Remove Auto-Absence Modal for Today (Synced with Database) */}
-      <Modal
-        isOpen={isRevertAutoAbsenceModalOpen}
-        onClose={() => setIsRevertAutoAbsenceModalOpen(false)}
-        title="إزالة وتراجع الغياب التلقائي (اليوم فقط)"
-        description={`إلغاء احتساب الغياب التلقائي المسجل اليوم واسترجاع الحصص المقتطعة لفوج: ${activeCourse?.title || ''}`}
-        maxWidth="650px"
-        footer={
-          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'wrap', width: '100%' }}>
-            <Button
-              variant="primary"
-              rightIcon={<RotateCcw size={15} />}
-              onClick={handleExecuteRevertAutoAbsence}
-              disabled={selectedRevertStudentIds.length === 0 || isRevertingAutoAbsence}
-              style={{
-                backgroundColor: '#ea580c',
-                borderColor: '#ea580c',
-              }}
-            >
-              {isRevertingAutoAbsence
-                ? 'جاري الحفظ والمزامنة...'
-                : `تأكيد إزالة الغياب واسترجاع الحصص (${selectedRevertStudentIds.length})`}
-            </Button>
-            <Button variant="secondary" onClick={() => setIsRevertAutoAbsenceModalOpen(false)}>
-              إلغاء
-            </Button>
-            {isAutoAbsentCancelledToday && (
-              <button
-                type="button"
-                onClick={handleResetAutoAbsentCancellation}
-                style={{
-                  marginRight: 'auto',
-                  padding: '5px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid #16a34a',
-                  backgroundColor: '#f0fdf4',
-                  color: '#15803d',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-                title="إعادة السماح للنظام باحتساب الغياب التلقائي لليوم إذا دعت الحاجة"
-              >
-                إعادة تفعيل الغياب التلقائي لليوم
-              </button>
-            )}
-          </div>
-        }
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {/* Information & Database Sync Banner */}
-          <div
-            style={{
-              padding: '12px 14px',
-              backgroundColor: '#fff7ed',
-              border: '1.5px solid #fdba74',
-              borderRadius: 'var(--radius-md)',
-              color: '#9a3412',
-              fontSize: '0.875rem',
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '10px',
-            }}
-          >
-            <RotateCcw size={22} color="#ea580c" style={{ flexShrink: 0, marginTop: '2px' }} />
-            <div>
-              <div style={{ fontWeight: 800, fontSize: '0.9375rem', marginBottom: '3px' }}>
-                تراجع وإزالة الغياب التلقائي لليوم فقط ({todayDateStr})
-              </div>
-              <div style={{ fontSize: '0.8125rem', lineHeight: '1.5' }}>
-                سيتم حذف تسجيل الغياب التلقائي المسجل اليوم للتلاميذ المحددين واسترجاع الحصص المقتطعة تلقائياً إلى رصيدهم.
-                <br />
-                <strong>⚡ ميزة المزامنة الفورية:</strong> تُحفظ العملية مباشرة في <strong>قاعدة البيانات (Supabase)</strong> وتتزامن فوراً مع كافة الحواسيب المتصلة، مع ضمان <strong>عدم إعادة تطبيق الغياب التلقائي</strong> لهذا الفوج اليوم.
-              </div>
-            </div>
-          </div>
 
-          {autoAbsentTodayStudents.length > 0 ? (
-            <>
-              {/* Select All / Deselect All Controls */}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '6px 10px',
-                  backgroundColor: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '6px',
-                  fontSize: '0.8125rem',
-                }}
-              >
-                <div style={{ fontWeight: 700, color: '#334155' }}>
-                  التلاميذ المعنيون بالتراجع: ({selectedRevertStudentIds.length} من {autoAbsentTodayStudents.length})
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedRevertStudentIds(autoAbsentTodayStudents.map((s) => s.id))}
-                    style={{
-                      border: 'none',
-                      backgroundColor: 'transparent',
-                      color: '#2563eb',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      fontSize: '0.75rem',
-                    }}
-                  >
-                    تحديد الكل
-                  </button>
-                  <span style={{ color: '#cbd5e1' }}>|</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedRevertStudentIds([])}
-                    style={{
-                      border: 'none',
-                      backgroundColor: 'transparent',
-                      color: '#64748b',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      fontSize: '0.75rem',
-                    }}
-                  >
-                    إلغاء التحديد
-                  </button>
-                </div>
-              </div>
-
-              {/* Students List with Checkboxes */}
-              <div
-                style={{
-                  maxHeight: '260px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '6px',
-                  paddingRight: '2px',
-                }}
-              >
-                {autoAbsentTodayStudents.map((std) => {
-                  const isChecked = selectedRevertStudentIds.includes(std.id);
-                  const todayAbsentLog = (std.attendanceLogs || []).find(
-                    (l) =>
-                      l.date === todayDateStr &&
-                      (l.status === 'absent_counted' ||
-                        l.status === 'absent_uncounted' ||
-                        l.type === 'absent_counted' ||
-                        l.type === 'absent_uncounted')
-                  );
-                  const isCounted =
-                    todayAbsentLog?.status === 'absent_counted' || todayAbsentLog?.type === 'absent_counted';
-                  const currentAttended = std.attendedSessions || 0;
-                  const restoredAttended = isCounted ? Math.max(0, currentAttended - 1) : currentAttended;
-                  const total = std.totalSessions || activeCourse?.totalSessionsDefault || 5;
-
-                  return (
-                    <label
-                      key={std.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '8px 12px',
-                        borderRadius: '8px',
-                        border: isChecked ? '1.5px solid #fdba74' : '1px solid #e2e8f0',
-                        backgroundColor: isChecked ? '#fffaf5' : '#ffffff',
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedRevertStudentIds((prev) => [...prev, std.id]);
-                            } else {
-                              setSelectedRevertStudentIds((prev) => prev.filter((id) => id !== std.id));
-                            }
-                          }}
-                          style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: '#ea580c' }}
-                        />
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: '0.875rem', color: '#1e293b' }}>
-                            {std.fullName}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <span>{std.academicLevel}</span>
-                            {todayAbsentLog?.notes && (
-                              <span style={{ color: '#9a3412', fontStyle: 'italic' }}>
-                                • {todayAbsentLog.notes}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
-                        <span
-                          style={{
-                            fontSize: '0.6875rem',
-                            padding: '2px 7px',
-                            borderRadius: '10px',
-                            backgroundColor: isCounted ? '#fee2e2' : '#fef3c7',
-                            color: isCounted ? '#b91c1c' : '#92400e',
-                            fontWeight: 700,
-                          }}
-                        >
-                          {isCounted ? 'غياب محسوب' : 'غياب معفى'}
-                        </span>
-                        {isCounted && (
-                          <span style={{ fontSize: '0.75rem', color: '#059669', fontWeight: 700 }}>
-                            رصيد الحصص: {currentAttended}/{total} ⬅️ يُسترجع إلى {restoredAttended}/{total}
-                          </span>
-                        )}
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <div
-              style={{
-                padding: '24px',
-                textAlign: 'center',
-                backgroundColor: '#f8fafc',
-                borderRadius: '8px',
-                border: '1px dashed #cbd5e1',
-                color: '#64748b',
-              }}
-            >
-              <CheckCircle2 size={36} color="#16a34a" style={{ margin: '0 auto 8px' }} />
-              <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '4px' }}>
-                {isAutoAbsentCancelledToday
-                  ? 'تم التراجع عن الغياب التلقائي لليوم ومزامنته بنجاح'
-                  : 'لا يوجد تلاميذ مسجلين كغياب اليوم في هذا الفوج'}
-              </div>
-              <div style={{ fontSize: '0.8125rem' }}>
-                {isAutoAbsentCancelledToday
-                  ? 'تم تسجيل حالة الإلغاء في قاعدة البيانات وتحديث جميع الأجهزة، ولن يتم احتساب الغياب التلقائي اليوم.'
-                  : 'جميع التلاميذ إما حاضرون أو في وضع الانتظار.'}
-              </div>
-            </div>
-          )}
-        </div>
-      </Modal>
 
       {/* Delete Student Confirmation Modal */}
       <Modal
@@ -6394,9 +6225,9 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
+              <div className="grid grid-cols-3 md:grid-cols-1 gap-3">
                 <Input
-                  label="عدد الحصص الجديدة في الباقة"
+                  label="عدد الحصص في الباقة"
                   type="number"
                   value={renewSessionsCount}
                   onChange={(e) => setRenewSessionsCount(e.target.value)}
@@ -6404,23 +6235,80 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                 />
 
                 <Input
-                  label={`المبلغ المسدد الآن (دج DZD) • الحد الأقصى: ${formatDZD(activeCourse.monthlyPrice || 0)}`}
+                  label="سعر باقة الدورة (دج DZD)"
                   type="number"
                   min="0"
-                  max={String(activeCourse.monthlyPrice || '')}
-                  value={renewPaidAmount}
+                  value={renewCoursePrice}
                   onChange={(e) => {
                     const val = e.target.value;
-                    const maxPrice = activeCourse.monthlyPrice || 0;
-                    if (maxPrice > 0 && Number(val) > maxPrice) {
-                      setRenewPaidAmount(String(maxPrice));
-                    } else {
+                    setRenewCoursePrice(val);
+                    if (renewPaidAmount === renewCoursePrice || !renewPaidAmount) {
                       setRenewPaidAmount(val);
                     }
                   }}
                   required
                 />
+
+                <Input
+                  label="المبلغ المسدد الآن (دج)"
+                  type="number"
+                  min="0"
+                  value={renewPaidAmount}
+                  onChange={(e) => setRenewPaidAmount(e.target.value)}
+                  required
+                />
               </div>
+
+              {/* Financial Status Summary */}
+              {(() => {
+                const price = Number(renewCoursePrice) || 0;
+                const paid = Number(renewPaidAmount) || 0;
+                const remaining = Math.max(0, price - paid);
+                return (
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      backgroundColor: remaining === 0 ? '#ecfdf5' : '#fff7ed',
+                      border: remaining === 0 ? '1px solid #a7f3d0' : '1px solid #fed7aa',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: '0.8125rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <span>الحالة المالية للباقة:</span>
+                    <strong style={{ color: remaining === 0 ? '#059669' : '#ea580c' }}>
+                      {remaining === 0 ? '✓ تم تسديد الرسوم كاملة (خالص)' : `متبقي كدين بذمة التلميذ: ${formatDZD(remaining)}`}
+                    </strong>
+                  </div>
+                );
+              })()}
+
+              {/* Session 1 Attendance Checkbox */}
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 14px',
+                  backgroundColor: 'rgba(37, 99, 235, 0.06)',
+                  border: '1px solid rgba(37, 99, 235, 0.2)',
+                  borderRadius: 'var(--radius-md)',
+                  cursor: 'pointer',
+                  fontSize: '0.8125rem',
+                  fontWeight: 600,
+                  color: 'var(--color-primary)',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={renewMarkTodayAttended}
+                  onChange={(e) => setRenewMarkTodayAttended(e.target.checked)}
+                  style={{ width: '16px', height: '16px', accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+                />
+                <span>تسجيل حضور الحصة الأولى لليوم مباشرة مع التجديد (ستظهر الدائرة الأولى خضراء)</span>
+              </label>
 
               {/* Calculated Result Preview */}
               <div
@@ -6437,7 +6325,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
               >
                 <span>رصيد الحصص بعد التجديد:</span>
                 <span style={{ fontWeight: 700, fontSize: '0.9375rem', fontFamily: 'monospace' }}>
-                  {overageCount} / {renewSessionsCount}
+                  {Math.max(overageCount, renewMarkTodayAttended ? 1 : 0)} / {renewSessionsCount} حصص
                 </span>
               </div>
 
@@ -6447,13 +6335,14 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                   variant="primary"
                   onClick={(e) => handleRenew(e, true)}
                   rightIcon={<Printer size={15} />}
+                  disabled={isRenewSubmitting}
                 >
-                  تجديد وطباعة الوصل
+                  {isRenewSubmitting ? 'جاري المعالجة...' : 'تجديد وطباعة الوصل'}
                 </Button>
-                <Button type="submit" variant="secondary" rightIcon={<RotateCw size={14} />}>
-                  تجديد فقط
+                <Button type="submit" variant="secondary" rightIcon={<RotateCw size={14} />} disabled={isRenewSubmitting}>
+                  {isRenewSubmitting ? 'جاري التجديد...' : 'تجديد فقط'}
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => setStudentToRenew(null)}>
+                <Button type="button" variant="ghost" onClick={() => setStudentToRenew(null)} disabled={isRenewSubmitting}>
                   إلغاء
                 </Button>
               </div>

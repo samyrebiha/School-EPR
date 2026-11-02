@@ -163,204 +163,108 @@ export const Payroll: React.FC = () => {
     return Math.round(earned);
   };
 
-  const handlePrintTeacherStatement = (teacher: Teacher) => {
+  // Select Course for Attendance Statement Modal
+  const [printingTeacherCourses, setPrintingTeacherCourses] = useState<Teacher | null>(null);
+
+  const onInitiatePrintStatement = (teacher: Teacher) => {
+    const teacherCourses = getTeacherCourses(teacher.id);
+    if (teacherCourses.length <= 1) {
+      handlePrintTeacherStatement(teacher);
+    } else {
+      setPrintingTeacherCourses(teacher);
+    }
+  };
+
+  const handlePrintTeacherStatement = (teacher: Teacher, targetCourseId?: string) => {
     const schoolName = currentSchool?.name || 'مدرستي التعليمية';
     const now = new Date();
     const formattedDate = `${formatDateArabic(now.toISOString().split('T')[0])} - ${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
 
-    const teacherCourses = getTeacherCourses(teacher.id);
-    const compensationType = teacher.compensationType || 'percentage_per_student';
-    const commission = teacher.commissionPercentage !== undefined ? teacher.commissionPercentage : 60;
-    const fixedRate = teacher.fixedRatePerStudent !== undefined ? teacher.fixedRatePerStudent : (teacher.fixedCourseRate !== undefined ? teacher.fixedCourseRate : 1000);
+    const allTeacherCourses = getTeacherCourses(teacher.id);
+    const coursesToPrint = targetCourseId ? allTeacherCourses.filter((c) => c.id === targetCourseId) : allTeacherCourses;
 
-    let compText = `نسبة ${commission}% من اشتراك كل تلميذ`;
-    if (compensationType === 'fixed_per_student' || (compensationType as string) === 'fixed_per_course') {
-      compText = `مبلغ مقطوع: ${fixedRate.toLocaleString('fr-DZ')} دج عن كل تلميذ`;
+    if (coursesToPrint.length === 0) {
+      alert('لا توجد أفواج مسندة لهذا الأستاذ للطباعة.');
+      return;
     }
 
-    // Flatten all students across all courses of this teacher
-    const studentRows: string[] = [];
-    let totalAllEnrolled = 0;
-    let totalExemptCount = 0;
-    let totalAllPresent = 0;
-    let totalAllSingleSessions = 0;
-    let totalAllSingleSessionTeacherAmount = 0;
-    let totalAllAbsentCounted = 0;
-    let totalAllAbsentUncounted = 0;
-    let totalAllCalculatedForTeacher = 0;
-    let totalAllSubscribedQuota = 0;
-    let totalAllTeacherShare = 0;
-    let totalAllStudentPaid = 0;
-    let totalAllStudentDebt = 0;
-    let totalKhalisCount = 0;
-
-    teacherCourses.forEach((c) => {
+    const courseSectionsHtml = coursesToPrint.map((c, courseIdx) => {
       const list = c.enrolledList || [];
-      totalAllEnrolled += list.length;
+      const courseStudentRows: string[] = [];
+      let courseExemptCount = 0;
+      let coursePresent = 0;
+      let courseSingleSessions = 0;
+      let courseAbsentCounted = 0;
+      let courseAbsentUncounted = 0;
+      let courseSubscribedQuota = 0;
+      let courseKhalisCount = 0;
 
-      // Group's current milestone: highest session progress reached in the current cycle
-      const courseMaxSessions = Math.max(
-        0,
-        ...list.map((s) => {
-          const logs = s.attendanceLogs || [];
-          const renewIdx = logs.findIndex((l) => l.status === 'renewed' || l.type === 'renewed');
-          const cycleLogs = renewIdx === -1 ? logs : logs.slice(0, renewIdx);
-          const validSessionLogs = cycleLogs.filter((l) => {
-            const st = l.status || l.type;
-            return st === 'present' || st === 'absent_counted' || st === 'absent_uncounted' || st === 'single_session';
-          });
-          return Math.max(s.attendedSessions || 0, validSessionLogs.length);
-        })
-      );
-
-      list.forEach((std) => {
+      list.forEach((std, stdIdx) => {
         const isExempt = !!std.isExempt;
         if (isExempt) {
-          totalExemptCount++;
+          courseExemptCount++;
         }
 
         const allLogs = std.attendanceLogs || [];
-        // Scope attendance strictly to the current active cycle (after the most recent renewal/cycle reset)
         const latestRenewalIdx = allLogs.findIndex((l) => l.status === 'renewed' || l.type === 'renewed');
         const currentLogs = latestRenewalIdx === -1 ? allLogs : allLogs.slice(0, latestRenewalIdx);
 
         const presentLogs = currentLogs.filter((l) => l.status === 'present');
-        // Single session logs are independent individual sessions; preserve from allLogs
         const singleSessionLogs = allLogs.filter((l) => l.status === 'single_session' || l.type === 'single_session');
         const absentCountedLogs = currentLogs.filter((l) => l.status === 'absent_counted');
         const absentUncountedLogs = currentLogs.filter((l) => l.status === 'absent_uncounted');
 
-        const allCycleSessionLogs = currentLogs.filter((l) => {
-          const st = l.status || l.type;
-          return st === 'present' || st === 'absent_counted' || st === 'absent_uncounted' || st === 'single_session';
-        });
-
-        const singleSessionTeacherAmount = singleSessionLogs.reduce((acc, l) => acc + (l.teacherAmount || 0), 0);
-        const singleSessionStudentAmount = singleSessionLogs.reduce((acc, l) => acc + (l.amount || 0), 0);
         const singleSessionCount = singleSessionLogs.length;
-
-        // Determine if student is a dedicated single-session enrollee or regular subscriber
         const hasCourseSub = !!latestRenewalIdx && latestRenewalIdx !== -1 ? true : ((std.totalSessions || 0) > 1 && !std.notes?.includes('حصة واحدة'));
         const isSingleStudent = (singleSessionLogs.length > 0 && !hasCourseSub) || (std.notes?.includes('حصة واحدة') && !hasCourseSub) || (std.totalSessions === 1 && !isExempt && !hasCourseSub);
 
-        const coursePrice = c.monthlyPrice || 0;
         const studentDebt = isExempt ? 0 : (std.totalDebt || 0);
         const isKhalis = !isExempt && !isSingleStudent && studentDebt <= 0;
-
-        // Calculate all money that actually entered from this student (خالص = سعر الدورة نفسها تماماً)
-        let studentPaid = 0;
-        if (isExempt) {
-          studentPaid = singleSessionStudentAmount;
-        } else if (isSingleStudent) {
-          studentPaid = Math.max(std.totalPaid || 0, singleSessionStudentAmount);
-        } else if (isKhalis) {
-          // التلميذ الخالص يمثل سعر الدورة نفسها تماماً
-          studentPaid = coursePrice;
-          totalKhalisCount++;
-        } else {
-          // التلميذ غير الخالص (مدين) لا يدرج ضمن مقبوضات الخالص
-          studentPaid = 0;
+        if (isKhalis) {
+          courseKhalisCount++;
         }
-
-        totalAllStudentPaid += studentPaid;
-        totalAllStudentDebt += studentDebt;
 
         const presentCount = currentLogs.length > 0 ? presentLogs.length : (std.attendedSessions || 0);
         const absentCounted = absentCountedLogs.length;
         const absentUncounted = absentUncountedLogs.length;
-        const totalCalculatedForTeacher = presentCount + absentCounted + singleSessionCount;
 
-        const studentCycleProgress = Math.max(presentCount, allCycleSessionLogs.length);
-        const missedGroupSessions = std.missedGroupSessions || 0;
+        coursePresent += presentCount;
+        courseSingleSessions += singleSessionCount;
+        courseAbsentCounted += absentCounted;
+        courseAbsentUncounted += absentUncounted;
 
-        totalAllPresent += presentCount;
-        totalAllSingleSessions += singleSessionCount;
-        totalAllSingleSessionTeacherAmount += singleSessionTeacherAmount;
-        totalAllAbsentCounted += absentCounted;
-        totalAllAbsentUncounted += absentUncounted;
-        totalAllCalculatedForTeacher += totalCalculatedForTeacher;
-
-        // Base package quota per cycle (e.g. 4)
         const basePackage = std.totalSessions && std.totalSessions > 0
           ? std.totalSessions
           : c.totalSessionsDefault && c.totalSessionsDefault > 0
           ? c.totalSessionsDefault
           : 4;
 
-        // In the current active cycle, the subscription quota is simply basePackage (not accumulated)!
-        const totalSubscribedSessions = basePackage;
-        totalAllSubscribedQuota += totalSubscribedSessions;
+        courseSubscribedQuota += basePackage;
+        const missedGroupSessions = std.missedGroupSessions || 0;
+        const isExceeded = presentCount > basePackage;
 
-        // Formulate absence & single session history details string for current cycle
-        const attendanceDetails: string[] = [];
-
-        if (missedGroupSessions > 0) {
-          attendanceDetails.push(
-            `<span style="color: #b45309; font-weight: bold; background-color: #fef3c7; border: 1px solid #fde68a; padding: 1px 5px; border-radius: 3px; display: inline-block;">⚠️ التحاق متأخر بالفوج (فاتته ${missedGroupSessions === 1 ? 'حصة واحدة' : missedGroupSessions === 2 ? 'حصتان' : `${missedGroupSessions} حصص`} سابقة)</span>`
-          );
-        }
-
-        if (singleSessionLogs.length > 0) {
-          singleSessionLogs.forEach((l) => {
-            attendanceDetails.push(`<span style="color: #2563eb; font-weight: bold;">● ${l.date}: حضور حصة واحدة (${(l.amount || 0).toLocaleString('fr-DZ')} دج | للأستاذ: ${(l.teacherAmount || 0).toLocaleString('fr-DZ')} دج)</span>`);
-          });
-        }
-        absentCountedLogs.forEach((l) => {
-          attendanceDetails.push(`${l.date} (حصة ${l.sessionNumber}): محسوبة`);
-        });
-        absentUncountedLogs.forEach((l) => {
-          attendanceDetails.push(`${l.date}: معفى ${l.notes ? `(${l.notes})` : ''}`);
-        });
-
-        // Student's monetary contribution to teacher based on student payment (خالص = سعر الدورة كاملة)
-        let teacherShareFromStudent = 0;
-        if (isExempt) {
-          // Exempt student does not generate teacher course dues (0 DZD)
-          teacherShareFromStudent = singleSessionTeacherAmount;
-        } else if (isSingleStudent) {
-          teacherShareFromStudent = singleSessionTeacherAmount;
-        } else if (isKhalis) {
-          // التلميذ الخالص: يحسب حق الأستاذ مباشرة على أساس سعر الدورة نفسها
-          if (compensationType === 'fixed_per_student' || (compensationType as string) === 'fixed_per_course') {
-            teacherShareFromStudent = fixedRate;
-          } else {
-            teacherShareFromStudent = Math.round(coursePrice * (commission / 100));
-          }
-        }
-        totalAllTeacherShare += teacherShareFromStudent;
-
-        const studentSchoolNet = isExempt ? 0 : Math.max(0, studentPaid - Math.round(teacherShareFromStudent));
-
-        const isExceeded = presentCount > totalSubscribedSessions;
-        const maxBoxes = Math.max(totalSubscribedSessions, presentCount);
+        // Visual attendance boxes
         const boxesHtmlList: string[] = [];
-
-        // 1. Missed Group Sessions (فاتت حصص قبل الالتحاق): خلايا فارغة تماماً
-        for (let m = 0; m < missedGroupSessions; m++) {
-          boxesHtmlList.push(
-            `<span style="width: 22px; height: 22px; border: 1.5px solid #334155; border-radius: 2px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;" title="حصة ${m + 1} للفوج: فائتة قبل التحاقه"></span>`
-          );
-        }
-
-        // 2. Student's session quota slots
-        for (let i = 0; i < maxBoxes; i++) {
+        const sessionSlotCount = Math.max(basePackage, presentCount, currentLogs.length);
+        for (let i = 0; i < sessionSlotCount; i++) {
           const log = currentLogs[i];
-          if (log && log.status === 'single_session') {
+          if (log && (log.status === 'present' || log.type === 'present')) {
             boxesHtmlList.push(
-              `<span style="width: 22px; height: 22px; border: 1.5px solid #334155; border-radius: 2px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 900; color: #0f172a; flex-shrink: 0;" title="حضور حصة واحدة">✓</span>`
+              `<span style="width: 22px; height: 22px; border: 1.5px solid #334155; border-radius: 2px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 900; color: #0f172a; flex-shrink: 0;" title="حضور">✓</span>`
+            );
+          } else if (log && (log.status === 'single_session' || log.type === 'single_session')) {
+            boxesHtmlList.push(
+              `<span style="width: 22px; height: 22px; border: 1.5px solid #334155; border-radius: 2px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 900; color: #0f172a; flex-shrink: 0;" title="حصة واحدة">✓</span>`
             );
           } else if (log && (log.status === 'absent_counted' || log.status === 'absent_uncounted')) {
-            // غائب: تبقى الخلية فارغة تماماً
             boxesHtmlList.push(
               `<span style="width: 22px; height: 22px; border: 1.5px solid #334155; border-radius: 2px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;" title="غياب مسجل"></span>`
             );
           } else if (i < presentCount) {
-            // حاضر: علامة صح في مربع قديم
             boxesHtmlList.push(
               `<span style="width: 22px; height: 22px; border: 1.5px solid #334155; border-radius: 2px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 900; color: #0f172a; flex-shrink: 0;" title="حضور مسجل">✓</span>`
             );
           } else {
-            // حصة متبقية: خلية فارغة بإطار خفيف
             boxesHtmlList.push(
               `<span style="width: 22px; height: 22px; border: 1.5px dashed #cbd5e1; border-radius: 2px; background-color: #ffffff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;" title="حصة متبقية"></span>`
             );
@@ -374,11 +278,11 @@ export const Payroll: React.FC = () => {
             </div>
             <div style="display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px; font-size: 11px;">
               <span style="font-weight: 800; font-family: monospace; color: ${isExceeded ? '#dc2626' : '#1e293b'};">
-                ${presentCount} / ${totalSubscribedSessions} حصص
+                ${presentCount} / ${basePackage} حصص
               </span>
               ${isExceeded ? `
                 <span style="background-color: #fee2e2; color: #dc2626; padding: 1px 8px; border-radius: 4px; font-size: 9.5px; font-weight: 700; border: 1px solid #fca5a5;">
-                  تجاوز بـ ${presentCount - totalSubscribedSessions}
+                  تجاوز بـ ${presentCount - basePackage}
                 </span>
               ` : ''}
               ${missedGroupSessions > 0 ? `
@@ -390,15 +294,36 @@ export const Payroll: React.FC = () => {
           </div>
         `;
 
-        studentRows.push(`
+        const attendanceDetails: string[] = [];
+        if (missedGroupSessions > 0) {
+          attendanceDetails.push(
+            `<span style="color: #b45309; font-weight: bold; background-color: #fef3c7; border: 1px solid #fde68a; padding: 1px 5px; border-radius: 3px; display: inline-block;">⚠️ التحاق متأخر بالفوج (فاتته ${missedGroupSessions === 1 ? 'حصة واحدة' : missedGroupSessions === 2 ? 'حصتان' : `${missedGroupSessions} حصص`} سابقة)</span>`
+          );
+        }
+        if (absentCounted > 0) {
+          attendanceDetails.push(
+            `<span style="color: #dc2626; font-weight: bold;">● غياب محسوب: ${absentCounted} (${absentCountedLogs.map((l) => l.date ? formatDateArabic(l.date) : '').filter(Boolean).join('، ')})</span>`
+          );
+        }
+        if (absentUncounted > 0) {
+          attendanceDetails.push(
+            `<span style="color: #ea580c; font-weight: bold;">● غياب معفى: ${absentUncounted} (${absentUncountedLogs.map((l) => l.date ? formatDateArabic(l.date) : '').filter(Boolean).join('، ')})</span>`
+          );
+        }
+        if (singleSessionCount > 0) {
+          attendanceDetails.push(
+            `<span style="color: #2563eb; font-weight: bold;">● حصص فردية: ${singleSessionCount} (${singleSessionLogs.map((l) => l.date ? formatDateArabic(l.date) : '').filter(Boolean).join('، ')})</span>`
+          );
+        }
+
+        courseStudentRows.push(`
           <tr>
-            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center;">${studentRows.length + 1}</td>
-            <td style="padding: 6px 8px; border: 1px solid #d1d5db; font-weight: bold;">
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center; font-weight: bold;">${stdIdx + 1}</td>
+            <td style="padding: 6px 8px; border: 1px solid #d1d5db; font-weight: bold; font-size: 11.5px;">
               ${std.fullName}
               ${isExempt ? `<div style="display: inline-block; background-color: #fef3c7; color: #92400e; border: 1px solid #f59e0b; padding: 1px 6px; border-radius: 4px; font-size: 9.5px; font-weight: bold; margin-right: 4px;">تلميذ معفى</div>` : ''}
               ${missedGroupSessions > 0 ? `<div style="display: block; background-color: #fffbeb; color: #b45309; border: 1px solid #fde68a; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: bold; margin-top: 3px;">⚠️ التحاق متأخر (فاتته ${missedGroupSessions === 1 ? 'حصة واحدة' : missedGroupSessions === 2 ? 'حصتان' : `${missedGroupSessions} حصص`})</div>` : ''}
             </td>
-            <td style="padding: 6px 8px; border: 1px solid #d1d5db;">${c.title}</td>
             <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center;">
               ${isExempt ? (
                 `<span style="color: #92400e; font-weight: bold; font-size: 10px;">معفى</span>`
@@ -409,11 +334,11 @@ export const Payroll: React.FC = () => {
                   `<span style="color: #2563eb; font-weight: bold; font-size: 10px;">حصة واحدة (خالص)</span>`
                 )
               ) : studentDebt <= 0 ? (
-                `<strong style="color: #16a34a; font-size: 11.5px;">خالص</strong>`
-              ) : studentPaid > 0 ? (
+                `<strong style="color: #16a34a; font-size: 11px; background-color: #dcfce7; padding: 2px 8px; border-radius: 4px; border: 1px solid #86efac;">خالص ✓</strong>`
+              ) : (std.totalPaid || 0) > 0 ? (
                 `<span style="color: #c2410c; font-weight: bold; font-size: 10px;">متبقي: ${studentDebt.toLocaleString('fr-DZ')} دج</span>`
               ) : (
-                `<span style="color: #dc2626; font-weight: bold; font-size: 10px;">غير مسدد (دين)</span>`
+                `<span style="color: #dc2626; font-weight: bold; font-size: 10px; background-color: #fee2e2; padding: 2px 6px; border-radius: 4px; border: 1px solid #fca5a5;">غير مسدد (دين)</span>`
               )}
             </td>
             <td style="padding: 6px 8px; border: 1px solid #d1d5db; text-align: center; vertical-align: middle;">
@@ -423,7 +348,7 @@ export const Payroll: React.FC = () => {
               ${isExempt ? `<span style="color: #92400e; font-weight: bold;">[تلميذ معفى من تسديد مصاريف الدورة]</span><br/>` : ''}
               ${attendanceDetails.length > 0
                 ? attendanceDetails.join('<br/>')
-                : (totalCalculatedForTeacher === 0
+                : (presentCount === 0 && absentCounted === 0
                   ? '<span style="color: #64748b;">دورة جديدة • في انتظار الحصص</span>'
                   : '<span style="color: #16a34a;">لا توجد غيابات مسجلة (حضور كامل)</span>')}
               ${missedGroupSessions > 0 && absentCounted === 0 && absentUncounted === 0 ? '<div style="color: #16a34a; font-size: 9.5px; margin-top: 2px; font-weight: 600;">● حضور منتظم منذ التحاقه (لا توجد غيابات)</div>' : ''}
@@ -432,12 +357,99 @@ export const Payroll: React.FC = () => {
           </tr>
         `);
       });
-    });
 
-    const teacherPaid = teacher.totalPaid || 0;
-    const teacherEarned = totalAllTeacherShare;
-    const netTeacherBalanceDue = Math.max(0, teacherEarned - teacherPaid);
-    const totalAllSchoolNet = Math.max(0, totalAllStudentPaid - Math.round(totalAllTeacherShare));
+      return `
+        <div class="course-sheet" style="${courseIdx > 0 ? 'page-break-before: always; margin-top: 25px;' : ''}">
+          <!-- Header for this specific Course -->
+          <div class="header-box">
+            <div>
+              <div class="title">${schoolName}</div>
+              <div class="sub-title">كشف حضور وغيابات الفوج الدراسي - الدورة الحالية</div>
+              <div style="font-size: 12px; color: #1e3a8a; margin-top: 4px; font-weight: 800;">
+                الفوج: <span style="color: #0f172a; font-size: 14px; background-color: #eff6ff; padding: 2px 8px; border-radius: 4px; border: 1px solid #bfdbfe;">${c.title}</span> 
+                ${c.academicLevel ? ` | المستوى: <strong>${c.academicLevel}</strong>` : ''}
+                ${c.scheduleTime ? ` | التوقيت: <strong>${c.scheduleTime}</strong>` : ''}
+              </div>
+              <div style="font-size: 10.5px; color: #4b5563; margin-top: 3px;">
+                الأستاذ: <strong>${teacher.fullName}</strong> | المادة: <strong>${teacher.subject}</strong> | عدد تلاميذ الفوج: <strong>${list.length} تلميذ</strong>
+              </div>
+            </div>
+            <div style="text-align: left; font-size: 10px; color: #4b5563;">
+              <div>تاريخ الطباعة: <strong>${formattedDate}</strong></div>
+              <div>الرقم المرجعي: <strong>STM-${c.id.replace('c-', '')}-${now.getFullYear()}</strong></div>
+            </div>
+          </div>
+
+          <!-- Legend / Course summary -->
+          <div class="legend-box">
+            <span><strong>دليل كشف الحضور:</strong></span>
+            <span><strong style="border: 1.5px solid #334155; padding: 0 4px; border-radius: 2px; font-weight: 900;">✓</strong>: حضور (${coursePresent + courseSingleSessions} حصة)</span>
+            <span><strong style="border: 1.5px solid #334155; padding: 0 8px; border-radius: 2px;">&nbsp;</strong>: غياب أو حصص فائتة (خلية فارغة)</span>
+            <span><strong>عدد التلاميذ</strong>: ${list.length} تلميذ</span>
+            ${courseExemptCount > 0 ? `<span><strong style="color: #92400e;">● تلاميذ معفيون</strong>: ${courseExemptCount} تلميذ</span>` : ''}
+            <span><strong>إجمالي حضور الفوج</strong>: ${coursePresent} / ${courseSubscribedQuota} حصة</span>
+          </div>
+
+          <!-- Course Table -->
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 28px; text-align: center;">#</th>
+                <th>اسم التلميذ</th>
+                <th style="width: 110px; text-align: center; color: #059669;">حالة الاشتراك</th>
+                <th style="width: 210px; text-align: center; color: #1e3a8a;">استهلاك الحصص (متابعة الحضور)</th>
+                <th>تفاصيل وتواريخ الحصص والغياب</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${courseStudentRows.length > 0 ? courseStudentRows.join('') : '<tr><td colspan="5" style="text-align: center; padding: 14px; color: #9ca3af; font-size: 12px;">لا يوجد تلاميذ مسجلين في هذا الفوج حتى الآن</td></tr>'}
+            </tbody>
+            ${courseStudentRows.length > 0 ? `
+            <tfoot>
+              <tr style="background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #94a3b8;">
+                <td colspan="2" style="padding: 8px; text-align: center; font-weight: 800; color: #1e3a8a;">
+                  مجموع الفوج (${list.length} تلميذ ${courseExemptCount > 0 ? `• منهم ${courseExemptCount} معفى` : ''})
+                </td>
+                <td style="padding: 8px; text-align: center; font-weight: 800; font-size: 11px;">
+                  <div style="font-size: 11px; color: #166534; font-weight: 800; background-color: #dcfce7; border: 1px solid #86efac; border-radius: 4px; padding: 2px 6px; display: inline-block;">
+                    ${courseKhalisCount} خالص
+                  </div>
+                </td>
+                <td style="padding: 8px; text-align: center; font-weight: 800; font-size: 11px;">
+                  <div style="font-size: 12px; color: #1e293b;">
+                    إجمالي الحضور: <span style="color: #16a34a; font-weight: 800;">${coursePresent}</span> / ${courseSubscribedQuota} حصة
+                  </div>
+                  <div style="display: flex; justify-content: center; gap: 8px; font-size: 9px; color: #64748b; margin-top: 3px;">
+                    ${courseSingleSessions > 0 ? `<span style="color: #2563eb; font-weight: 700;">● ${courseSingleSessions} فردية</span>` : ''}
+                    ${courseAbsentCounted > 0 ? `<span style="color: #dc2626; font-weight: 700;">● ${courseAbsentCounted} غياب محسوب</span>` : ''}
+                    ${courseAbsentUncounted > 0 ? `<span style="color: #ea580c; font-weight: 700;">● ${courseAbsentUncounted} غياب معفى</span>` : ''}
+                  </div>
+                </td>
+                <td style="padding: 8px; font-size: 10px; color: #64748b;">
+                  إجمالي الحصص المسجلة للفوج: ${coursePresent + courseSingleSessions + courseAbsentCounted + courseAbsentUncounted} حصة
+                </td>
+              </tr>
+            </tfoot>
+            ` : ''}
+          </table>
+
+          <!-- Signatures for this Course -->
+          <div class="signatures">
+            <div class="sig-box">
+              توقيع وختم إدارة المدرسة
+              <div style="height: 40px;"></div>
+            </div>
+            <div class="sig-box">
+              توقيع واستلام الأستاذ(ة): <strong>${teacher.fullName}</strong>
+              <div style="font-size: 9.5px; color: #6b7280; margin-top: 2px;">
+                كشف حضور وغيابات فوج: <strong>${c.title}</strong>
+              </div>
+              <div style="height: 30px;"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    });
 
     const printWindow = window.open('', '_blank', 'width=1000,height=850');
     if (!printWindow) {
@@ -445,12 +457,16 @@ export const Payroll: React.FC = () => {
       return;
     }
 
+    const docTitle = targetCourseId && coursesToPrint[0]
+      ? `كشف حضور فوج: ${coursesToPrint[0].title} - ${teacher.fullName}`
+      : `كشف حضور أفواج الأستاذ - ${teacher.fullName}`;
+
     printWindow.document.write(`
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
       <head>
         <meta charset="utf-8">
-        <title>كشف مستحقات وحضور الأستاذ - ${teacher.fullName}</title>
+        <title>${docTitle}</title>
         <style>
           @page {
             size: A4 landscape;
@@ -459,6 +475,7 @@ export const Payroll: React.FC = () => {
           * {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
+            box-sizing: border-box;
           }
           body {
             font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
@@ -487,28 +504,6 @@ export const Payroll: React.FC = () => {
             font-size: 12px;
             font-weight: 600;
             color: #4b5563;
-          }
-          .info-cards {
-            display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            gap: 8px;
-            margin-bottom: 12px;
-          }
-          .card {
-            border: 1px solid #e5e7eb;
-            background-color: #f9fafb;
-            padding: 8px 10px;
-            border-radius: 6px;
-          }
-          .card-title {
-            font-size: 10px;
-            color: #6b7280;
-            margin-bottom: 3px;
-            font-weight: 600;
-          }
-          .card-val {
-            font-size: 13.5px;
-            font-weight: 800;
           }
           table {
             width: 100%;
@@ -550,158 +545,17 @@ export const Payroll: React.FC = () => {
           }
           @media print {
             body { padding: 0; }
+            .course-sheet {
+              page-break-after: always;
+            }
+            .course-sheet:last-child {
+              page-break-after: auto;
+            }
           }
         </style>
       </head>
       <body>
-        <div class="header-box">
-          <div>
-            <div class="title">${schoolName}</div>
-            <div class="sub-title">كشف حضور وغيابات التلاميذ للدورة الحالية</div>
-            <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">
-              الأستاذ: <strong>${teacher.fullName}</strong> | المادة: <strong>${teacher.subject}</strong> | نظام الأتعاب: <strong>${compText}</strong>
-            </div>
-          </div>
-          <div style="text-align: left; font-size: 10px; color: #4b5563;">
-            <div>تاريخ الاستخراج: <strong>${formattedDate}</strong></div>
-            <div>الرقم المرجعي: <strong>STM-TCH-${teacher.id.replace('t-', '')}-${now.getFullYear()}</strong></div>
-          </div>
-        </div>
-
-        <div class="legend-box">
-          <span>دليل كشف الحضور الكلاسيكي:</span>
-          <span><strong style="border: 1.5px solid #334155; padding: 0 4px; border-radius: 2px; font-weight: 900;">✓</strong>: حضور (${totalAllPresent + totalAllSingleSessions} حصة)</span>
-          <span><strong style="border: 1.5px solid #334155; padding: 0 8px; border-radius: 2px;">&nbsp;</strong>: غياب أو حصص فائتة قبل الالتحاق (خلية فارغة)</span>
-          <span><strong>المبالغ المسددة فعلياً</strong>: ${totalAllStudentPaid.toLocaleString('fr-DZ')} دج</span>
-          <span><strong style="color: #92400e;">● تلاميذ معفيون</strong>: ${totalExemptCount} تلميذ</span>
-          <span><strong>إجمالي الحصص المسجلة</strong>: ${totalAllPresent + totalAllSingleSessions + totalAllAbsentCounted + totalAllAbsentUncounted} حصة</span>
-        </div>
-
-        <div style="font-weight: 700; margin-bottom: 6px; font-size: 11px; color: #1e3a8a;">
-          كشف حضور وغياب التلاميذ المفصل في أفواج الأستاذ:
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 25px; text-align: center;">#</th>
-              <th>اسم التلميذ</th>
-              <th>الفوج</th>
-              <th style="width: 90px; text-align: center; color: #059669;">المسدد من التلميذ</th>
-              <th style="width: 210px; text-align: center; color: #1e3a8a;">استهلاك الحصص (متابعة الحضور)</th>
-              <th>تفاصيل وتواريخ الحصص والغياب</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${studentRows.length > 0 ? studentRows.join('') : '<tr><td colspan="6" style="text-align: center; padding: 12px; color: #9ca3af;">لا يوجد تلاميذ مسجلين في أفواج هذا الأستاذ حتى الآن</td></tr>'}
-          </tbody>
-          ${studentRows.length > 0 ? `
-          <tfoot>
-            <tr style="background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #94a3b8;">
-              <td colspan="3" style="padding: 8px; text-align: center; font-weight: 800; color: #1e3a8a;">
-                المجموع الإجمالي العام (${studentRows.length} تلميذ ${totalExemptCount > 0 ? `• منهم ${totalExemptCount} معفى` : ''})
-              </td>
-              <td style="padding: 8px; text-align: center; font-weight: 800; font-size: 11px;">
-                <div style="font-size: 11px; color: #166534; font-weight: 800; background-color: #dcfce7; border: 1px solid #86efac; border-radius: 4px; padding: 2px 6px; display: inline-block; margin-bottom: 3px;">
-                  مجموع (${totalKhalisCount}) كلمة خالص
-                </div>
-                <div style="font-size: 13.5px; color: #15803d; font-weight: 900;">+${totalAllStudentPaid.toLocaleString('fr-DZ')} دج</div>
-                <div style="font-size: 8.5px; color: #4b5563; font-weight: 600; margin-top: 1px;">(${totalKhalisCount} خالص × سعر الدورة)</div>
-                <div style="font-size: 10px; color: #2563eb; font-weight: 800; margin-top: 3px; border-top: 1px dashed #cbd5e1; padding-top: 2px;">حق الأستاذ: -${Math.round(totalAllTeacherShare).toLocaleString('fr-DZ')} دج</div>
-                ${totalAllStudentDebt > 0 ? `<div style="font-size: 8.5px; color: #dc2626; font-weight: bold; margin-top: 1px;">(ديون معلقة: ${totalAllStudentDebt.toLocaleString('fr-DZ')} دج)</div>` : ''}
-              </td>
-              <td style="padding: 8px; text-align: center; font-weight: 800; font-size: 11px;">
-                <div style="font-size: 12px; color: #1e293b;">
-                  إجمالي الحضور: <span style="color: #16a34a; font-weight: 800;">${totalAllPresent}</span> / ${totalAllSubscribedQuota} حصة
-                </div>
-                <div style="display: flex; justify-content: center; gap: 8px; font-size: 9px; color: #64748b; margin-top: 3px;">
-                  ${totalAllSingleSessions > 0 ? `<span style="color: #2563eb; font-weight: 700;">● ${totalAllSingleSessions} فردية</span>` : ''}
-                  ${totalAllAbsentCounted > 0 ? `<span style="color: #dc2626; font-weight: 700;">● ${totalAllAbsentCounted} غياب محسوب</span>` : ''}
-                  ${totalAllAbsentUncounted > 0 ? `<span style="color: #ea580c; font-weight: 700;">● ${totalAllAbsentUncounted} غياب معفى</span>` : ''}
-                </div>
-              </td>
-              <td style="padding: 8px; font-size: 10px; color: #64748b;">
-                إجمالي الحصص: ${totalAllPresent + totalAllSingleSessions + totalAllAbsentCounted + totalAllAbsentUncounted} حصة
-              </td>
-            </tr>
-          </tfoot>
-          ` : ''}
-        </table>
-
-        <!-- Total Financial Clearance & Teacher Rights Summary Box -->
-        <div style="margin-top: 14px; margin-bottom: 12px; border: 2px solid #2563eb; border-radius: 8px; background-color: #f8fafc; padding: 12px 16px; page-break-inside: avoid;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #cbd5e1; padding-bottom: 8px; margin-bottom: 10px;">
-            <div style="font-size: 13px; font-weight: 800; color: #1e3a8a; display: flex; align-items: center; gap: 6px;">
-              <span>💰</span>
-              <span>خلاصة الحساب المالي: خلاص المقبوضات كاملة وحق الأستاذ وحق المؤسسة</span>
-            </div>
-            <div style="font-size: 10px; font-weight: 700; color: #64748b;">
-              طريقة احتساب الأتعاب: <strong>${compText}</strong>
-            </div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
-            <div style="background-color: #f0fdf4; border: 1.5px solid #86efac; border-radius: 6px; padding: 8px 10px;">
-              <div style="font-size: 10.5px; color: #166534; font-weight: 800; margin-bottom: 2px;">1. خلاص مقبوضات التلاميذ (+)</div>
-              <div style="font-size: 11px; color: #15803d; font-weight: 800; margin-bottom: 2px;">مجموع (${totalKhalisCount}) كلمة خالص</div>
-              <div style="font-size: 16px; font-weight: 900; color: #15803d;">+${totalAllStudentPaid.toLocaleString('fr-DZ')} دج</div>
-              <div style="font-size: 8.5px; color: #166534; margin-top: 2px; font-weight: 600;">(كل خالص = سعر الدورة نفسها)</div>
-            </div>
-
-            <div style="background-color: #eff6ff; border: 1.5px solid #93c5fd; border-radius: 6px; padding: 8px 10px;">
-              <div style="font-size: 10.5px; color: #1e40af; font-weight: 800; margin-bottom: 2px;">2. حق الأستاذ كامل (-)</div>
-              <div style="font-size: 11px; color: #2563eb; font-weight: 800; margin-bottom: 2px;">محسوب بناءً على (${totalKhalisCount}) خالص</div>
-              <div style="font-size: 16px; font-weight: 900; color: #2563eb;">-${Math.round(totalAllTeacherShare).toLocaleString('fr-DZ')} دج</div>
-              <div style="font-size: 8.5px; color: #3b82f6; margin-top: 2px; font-weight: 600;">(${compText})</div>
-            </div>
-
-            <div style="background-color: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 6px; padding: 8px 10px;">
-              <div style="font-size: 10.5px; color: #475569; font-weight: 800; margin-bottom: 2px;">3. صافي حق المؤسسة الباقي (=)</div>
-              <div style="font-size: 11px; color: #475569; font-weight: 800; margin-bottom: 2px;">المقبوضات - حق الأستاذ</div>
-              <div style="font-size: 16px; font-weight: 900; color: #0f172a;">+${totalAllSchoolNet.toLocaleString('fr-DZ')} دج</div>
-              <div style="font-size: 8.5px; color: #64748b; margin-top: 2px; font-weight: 600;">المتبقي لصندوق المؤسسة</div>
-            </div>
-
-            <div style="background-color: ${netTeacherBalanceDue > 0 ? '#fffbeb' : '#f0fdf4'}; border: 1.5px solid ${netTeacherBalanceDue > 0 ? '#fde68a' : '#86efac'}; border-radius: 6px; padding: 8px 10px;">
-              <div style="font-size: 10.5px; color: ${netTeacherBalanceDue > 0 ? '#92400e' : '#166534'}; font-weight: 800; margin-bottom: 2px;">4. المتبقي في الذمة للأستاذ</div>
-              <div style="font-size: 11px; color: ${netTeacherBalanceDue > 0 ? '#b45309' : '#15803d'}; font-weight: 800; margin-bottom: 2px;">المستحق - المدفوع مسبقاً</div>
-              <div style="font-size: 16px; font-weight: 900; color: ${netTeacherBalanceDue > 0 ? '#d97706' : '#15803d'};">
-                ${netTeacherBalanceDue.toLocaleString('fr-DZ')} دج
-              </div>
-              <div style="font-size: 8.5px; color: ${netTeacherBalanceDue > 0 ? '#b45309' : '#16a34a'}; margin-top: 2px; font-weight: 600;">
-                ${teacherPaid > 0 ? `(تم تسديد: ${teacherPaid.toLocaleString('fr-DZ')} دج)` : (netTeacherBalanceDue > 0 ? 'مستحق الصرف' : 'خالص بالكامل ✓')}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Footer Clarification Box -->
-        <div style="margin-top: 12px; margin-bottom: 14px; padding: 10px 14px; background-color: #fffbeb; border: 1.5px solid #fcd34d; border-radius: 6px; font-size: 11px; color: #92400e; line-height: 1.6;">
-          <div style="font-weight: 800; font-size: 11.5px; margin-bottom: 5px; display: flex; align-items: center; gap: 6px; color: #78350f;">
-            <span>📌</span>
-            <span>توضيح بخصوص خلاص مقبوضات التلاميذ والمستحقات في هذه الدورة:</span>
-          </div>
-          <div>
-            • <strong>التلاميذ المعفيون:</strong> ${totalExemptCount > 0 ? `يتضمن هذا الكشف عدد (<strong>${totalExemptCount}</strong>) تلميذ معفى من تسديد مصاريف الدورة، ومكتوب في خاناتهم بوضوح <strong>"معفى"</strong> (لا يترتب عليهم مستحق للأستاذ).` : 'لا يوجد تلاميذ معفيون في أفواج هذا الأستاذ حالياً.'}
-          </div>
-          <div>
-            • <strong>خلاص مقبوضات التلاميذ:</strong> إجمالي المقبوضات المحسوبة بلغت <strong>${totalAllStudentPaid.toLocaleString('fr-DZ')} دج</strong> وهي تمثل مجموع (${totalKhalisCount}) كلمة خالص (حيث كل كلمة خالص تمثل سعر الدورة نفسها تماماً)${totalAllStudentDebt > 0 ? ` مع بقاء ديون معلقة بقيمة <strong>${totalAllStudentDebt.toLocaleString('fr-DZ')} دج</strong> بذمة التلاميذ قيد التحصيل وتضاف فور تسديدها` : ' (تم تحصيل كامل اشتراكات الفوج بنجاح)'}.
-          </div>
-        </div>
-
-        <div class="signatures">
-          <div class="sig-box">
-            توقيع وختم إدارة المدرسة
-            <div style="height: 40px;"></div>
-          </div>
-          <div class="sig-box">
-            توقيع واستلام الأستاذ: <strong>${teacher.fullName}</strong>
-            <div style="font-size: 9.5px; color: #6b7280; margin-top: 2px;">
-              أقر باستلامي المستحقات وموافقتي على كشف الحضور والغيابات المذكور أعلاه
-            </div>
-            <div style="height: 30px;"></div>
-          </div>
-        </div>
-
+        ${courseSectionsHtml.join('')}
         <script>
           window.onload = function() {
             window.print();
@@ -1606,7 +1460,7 @@ export const Payroll: React.FC = () => {
           <Button
             variant="primary"
             size="sm"
-            onClick={() => handlePrintTeacherStatement(t)}
+            onClick={() => onInitiatePrintStatement(t)}
             title="كشف تفصيلي لحضور وغياب تلاميذ الأفواج"
             rightIcon={<FileText size={13} />}
           >
@@ -1866,7 +1720,7 @@ export const Payroll: React.FC = () => {
               </Button>
               <Button
                 variant="secondary"
-                onClick={() => handlePrintTeacherStatement(activeTeacher)}
+                onClick={() => onInitiatePrintStatement(activeTeacher)}
                 rightIcon={<FileText size={15} />}
                 style={{ width: '100%', justifyContent: 'center' }}
               >
@@ -1960,6 +1814,15 @@ export const Payroll: React.FC = () => {
                           {exemptCount > 0 && (
                             <Badge variant="warning">{exemptCount} معفى</Badge>
                           )}
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handlePrintTeacherStatement(activeTeacher, course.id)}
+                            rightIcon={<Printer size={13} />}
+                            title="طباعة كشف حضور هذا الفوج وحده"
+                          >
+                            كشف حضور الفوج
+                          </Button>
                           <Badge variant="primary">{enrolled} تلاميذ</Badge>
                         </div>
                       </div>
@@ -2465,6 +2328,98 @@ export const Payroll: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {/* Course Selection Modal for Attendance Sheet Printing */}
+      {printingTeacherCourses && (
+        <Modal
+          isOpen={true}
+          onClose={() => setPrintingTeacherCourses(null)}
+          title={`طباعة كشف الحضور - الأستاذ: ${printingTeacherCourses.fullName}`}
+          maxWidth="560px"
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', margin: 0 }}>
+              اختر الفوج الدراسي لطباعة كشف حضوره مستقلاً، أو يمكنك طباعة جميع الأفواج (بحيث يطبع كل فوج في ورقة منفصلة):
+            </p>
+
+            {/* Print All Button */}
+            <div
+              onClick={() => {
+                handlePrintTeacherStatement(printingTeacherCourses);
+                setPrintingTeacherCourses(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 16px',
+                backgroundColor: 'var(--color-bg-surface-secondary)',
+                border: '1.5px solid var(--color-primary)',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--color-primary)' }}>
+                  🖨️ طباعة جميع الأفواج ({getTeacherCourses(printingTeacherCourses.id).length} أفواج)
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                  طباعة كشف حضور كل فوج في صفحة منفصلة مستقلة تماماً
+                </div>
+              </div>
+              <Badge variant="primary">الكل</Badge>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
+
+            <div style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--color-text-primary)' }}>
+              أو اختر فوجاً محدداً لطباعته وحده:
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {getTeacherCourses(printingTeacherCourses.id).map((course) => {
+                const count = course.enrolledList?.length || 0;
+                return (
+                  <div
+                    key={course.id}
+                    onClick={() => {
+                      handlePrintTeacherStatement(printingTeacherCourses, course.id);
+                      setPrintingTeacherCourses(null);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '10px 14px',
+                      backgroundColor: 'var(--color-bg-surface)',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 'var(--radius-md)',
+                      cursor: 'pointer',
+                      transition: 'border-color 0.2s',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-primary)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-border)')}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
+                        {course.title}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                        {course.academicLevel || 'عام'} • {course.scheduleTime || 'توقيت غير محدد'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Badge variant="neutral">{count} تلميذ</Badge>
+                      <Printer size={15} style={{ color: 'var(--color-text-muted)' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Modal>
+      )}
 
     </div>
   );

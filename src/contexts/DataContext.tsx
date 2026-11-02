@@ -100,7 +100,9 @@ export interface DataContextType {
     courseId: string,
     studentId: string,
     newTotalSessions: number,
-    paidAmount: number
+    paidAmount: number,
+    customCoursePrice?: number,
+    markTodayAttended?: boolean
   ) => {
     overageDeducted: number;
     startingAttended: number;
@@ -257,14 +259,89 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [rawTeachers, setRawTeachers] = useState<Teacher[]>(() => storage.getTeachers());
   const [courses, setCourses] = useState<Course[]>(() => {
     const localCourses = storage.getCourses();
-    return localCourses.map((c) => ({
-      ...c,
-      enrolledList: reconcileCourseStudents(c.enrolledList || [], c.monthlyPrice),
-    }));
+    const todayStr = new Date().toISOString().split('T')[0];
+    return localCourses.map((c) => {
+      const isTargetCourse =
+        c.title?.includes('4 متوسط') ||
+        c.title?.includes('رابعة متوسط') ||
+        c.teacherName?.includes('المرغني') ||
+        c.teacherName?.includes('مبروك');
+
+      // Course real price is 1500 DZD
+      const correctedMonthlyPrice = isTargetCourse && (c.monthlyPrice === 3500 || !c.monthlyPrice) ? 1500 : (c.monthlyPrice || 1500);
+
+      const fixedEnrolledList = (c.enrolledList || []).map((std) => {
+        let fixedStd = { ...std };
+
+        // 1. Financial correction: paid 1500 and debt 2000 (was calculated based on wrong 3500 base price)
+        if (
+          (fixedStd.totalPaid === 1500 && fixedStd.totalDebt === 2000) ||
+          (isTargetCourse && fixedStd.totalPaid === 1500 && (fixedStd.totalDebt || 0) > 0)
+        ) {
+          fixedStd.coursePrice = 1500;
+          fixedStd.totalDebt = 0;
+        } else if (isTargetCourse && (fixedStd.coursePrice === 3500 || !fixedStd.coursePrice)) {
+          fixedStd.coursePrice = 1500;
+        }
+
+        // 2. Attendance deduplication: fix any student registered twice today!
+        const todayAttendanceLogs = (fixedStd.attendanceLogs || []).filter(
+          (l) => l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session')
+        );
+
+        if (todayAttendanceLogs.length > 1) {
+          let keptOne = false;
+          const cleanedLogs = (fixedStd.attendanceLogs || []).filter((l) => {
+            const isTodayAtt = l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session');
+            if (isTodayAtt) {
+              if (!keptOne) {
+                keptOne = true;
+                return true;
+              }
+              return false; // remove duplicate log
+            }
+            return true;
+          });
+
+          const extraCount = todayAttendanceLogs.length - 1;
+          fixedStd.attendanceLogs = cleanedLogs;
+          fixedStd.attendedSessions = Math.max(1, (fixedStd.attendedSessions || 1) - extraCount);
+        } else if (todayAttendanceLogs.length === 1 && (!fixedStd.attendedSessions || fixedStd.attendedSessions === 0)) {
+          fixedStd.attendedSessions = 1;
+        }
+
+        return reconcileStudentFinancials(fixedStd, correctedMonthlyPrice);
+      });
+
+      return {
+        ...c,
+        monthlyPrice: correctedMonthlyPrice,
+        enrolledList: fixedEnrolledList,
+      };
+    });
   });
   const [classrooms, setClassrooms] = useState<Classroom[]>(() => storage.getClassrooms());
-  const [transactions, setTransactions] = useState<PaymentTransaction[]>(() => storage.getTransactions());
-  const [debts, setDebts] = useState<DebtRecord[]>(() => storage.getDebts());
+  const [transactions, setTransactions] = useState<PaymentTransaction[]>(() => {
+    const localTx = storage.getTransactions();
+    // Deduplicate any rapid payments recorded within minutes for the same student and amount
+    const seen = new Set<string>();
+    return localTx.filter((tx) => {
+      if (tx.notes?.includes('تجديد اشتراك') && tx.amount === 1500) {
+        const key = `${tx.studentId || tx.studentName}-${tx.amount}-${tx.date}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+      }
+      return true;
+    });
+  });
+  const [debts, setDebts] = useState<DebtRecord[]>(() => {
+    const localDebts = storage.getDebts();
+    // Remove erroneous 2000 DZD debt records generated from 1500 paid in 3500 course
+    return localDebts.filter((d) => {
+      if (d.remainingAmount === 2000 && d.paidAmount === 1500 && d.totalAmount === 3500) return false;
+      return true;
+    });
+  });
   const [expenses, setExpenses] = useState<Expense[]>(() => storage.getExpenses());
 
   // Prevent background polling / realtime from clobbering recent local user actions
@@ -272,6 +349,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const markLocalWrite = () => {
     lastLocalWriteRef.current = Date.now();
   };
+
+  // Bandwidth & Egress Protection: Track last remote fetch timestamp to prevent excessive egress consumption
+  const lastFetchTimeRef = useRef<number>(0);
 
   // Auto-Save & Sync States
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
@@ -365,8 +445,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       safeSupabaseCall(
         async () => {
           const res = await supabaseService.upsertCourse(c, sId, options);
-          if (res && res.enrolledList && res.enrolledList.length !== (c.enrolledList || []).length) {
-            // Update local state if remote merge brought additional students from the other user!
+          if (res && res.enrolledList) {
+            // Update local state if remote merge brought additional students or reconciled updates
             setCourses((prev) =>
               prev.map((item) =>
                 item.id === c.id
@@ -403,6 +483,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, 4200);
       return false;
     }
+    // Bandwidth / Egress protection: Throttle silent background refreshes (min 15s interval)
+    const now = Date.now();
+    if (silent && now - lastFetchTimeRef.current < 15000) {
+      return false;
+    }
+    lastFetchTimeRef.current = now;
     setIsRefreshing(true);
     try {
       if (typeof navigator !== 'undefined' && navigator.onLine) {
@@ -490,7 +576,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
                     // If this device has no uncommitted local writes or pending offline actions,
                     // trust the authoritative remote student state from Supabase directly!
-                    if (!isPendingOffline && !isRecentWrite) {
+                    const localRenewLog = (std.attendanceLogs || []).find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
+                    const remoteRenewLog = (remoteStd.attendanceLogs || []).find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
+
+                    // If remote has a newer renewal that this computer doesn't have yet, accept remote student directly
+                    if (remoteRenewLog && !localRenewLog) {
+                      studentMap.set(std.id, reconcileStudentFinancials(remoteStd, monthlyPrice));
+                    } else if (localRenewLog && !remoteRenewLog) {
+                      // Local device just renewed this student and remote hasn't received it yet -> keep local
+                      studentMap.set(std.id, reconcileStudentFinancials(std, monthlyPrice));
+                    } else if (!isPendingOffline && !isRecentWrite) {
                       studentMap.set(std.id, reconcileStudentFinancials(remoteStd, monthlyPrice));
                     } else {
                       const logMap = new Map<string, SessionAttendanceLog>();
@@ -499,57 +594,67 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
                       const isExempt = !!(remoteStd.isExempt || std.isExempt);
                       const maxPaid = Math.max(remoteStd.totalPaid || 0, std.totalPaid || 0);
-                      // Renewal-aware session count and debt calculation:
-                      const localRenewLog = (std.attendanceLogs || []).find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
-                      const remoteRenewLog = (remoteStd.attendanceLogs || []).find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
-                      let mergedAttended = Math.max(remoteStd.attendedSessions || 0, std.attendedSessions || 0);
-                      let mergedDebt = isExempt ? 0 : (std.totalDebt !== undefined ? std.totalDebt : (remoteStd.totalDebt || 0));
 
-                      const mergedLogs = Array.from(logMap.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+                      const mergedLogs = Array.from(logMap.values()).sort((a, b) => {
+                        const dateComp = (b.date || '').localeCompare(a.date || '');
+                        if (dateComp !== 0) return dateComp;
+                        const timeComp = (b.time || '').localeCompare(a.time || '');
+                        if (timeComp !== 0) return timeComp;
+                        return (b.id || '').localeCompare(a.id || '');
+                      });
 
-                      if (localRenewLog || remoteRenewLog) {
-                        const renewIdx = mergedLogs.findIndex((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
-                        const currentCycleLogs = renewIdx === -1 ? mergedLogs : mergedLogs.slice(0, renewIdx);
-                        const activeCycleSessions = currentCycleLogs.filter((l) => {
+                      const latestRenewLog = mergedLogs.find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
+                      let activeCycleSessions = 0;
+                      if (latestRenewLog) {
+                        const renewDate = latestRenewLog.date || '';
+                        const renewTime = latestRenewLog.time || '';
+                        activeCycleSessions = mergedLogs.filter((l) => {
+                          if (!l) return false;
+                          const st = l.status || l.type;
+                          const isSession = st === 'present' || st === 'absent_counted' || st === 'single_session';
+                          if (!isSession) return false;
+                          const logDate = l.date || '';
+                          if (logDate > renewDate) return true;
+                          if (logDate === renewDate) {
+                            return (
+                              l.sessionNumber === 1 ||
+                              l.notes?.includes('مجدد') ||
+                              l.notes?.includes('الدورة الجديدة') ||
+                              (l.time || '') >= renewTime
+                            );
+                          }
+                          return false;
+                        }).length;
+                      } else {
+                        activeCycleSessions = mergedLogs.filter((l) => {
                           const st = l.status || l.type;
                           return st === 'present' || st === 'absent_counted' || st === 'single_session';
                         }).length;
-
-                        if (localRenewLog && !remoteRenewLog) {
-                          // Local device renewed -> respect local reset/active sessions & debt
-                          mergedAttended = Math.max(std.attendedSessions || 0, activeCycleSessions);
-                          if (!isExempt) mergedDebt = std.totalDebt !== undefined ? std.totalDebt : 0;
-                        } else if (remoteRenewLog && !localRenewLog) {
-                          // Remote server has a newer renewal -> respect remote reset/active sessions & debt
-                          mergedAttended = Math.max(remoteStd.attendedSessions || 0, activeCycleSessions);
-                          if (!isExempt) mergedDebt = remoteStd.totalDebt !== undefined ? remoteStd.totalDebt : 0;
-                        } else {
-                          // Both sides know about renewal
-                          mergedAttended = Math.max(activeCycleSessions, Math.min(remoteStd.attendedSessions || 0, std.attendedSessions || 0));
-                          mergedAttended = Math.max(mergedAttended, activeCycleSessions);
-                          if (!isExempt) {
-                            const d1 = remoteStd.totalDebt !== undefined ? remoteStd.totalDebt : 999999;
-                            const d2 = std.totalDebt !== undefined ? std.totalDebt : 999999;
-                            mergedDebt = Math.min(d1, d2);
-                            if (mergedDebt === 999999) mergedDebt = 0;
-                          }
-                        }
-                      } else if (!isExempt) {
-                        const d1 = remoteStd.totalDebt !== undefined ? remoteStd.totalDebt : 999999;
-                        const d2 = std.totalDebt !== undefined ? std.totalDebt : 999999;
-                        mergedDebt = Math.min(d1, d2);
-                        if (mergedDebt === 999999) mergedDebt = 0;
                       }
 
+                      let mergedAttended = Math.max(activeCycleSessions, remoteStd.attendedSessions || 0, std.attendedSessions || 0);
+                      let mergedDebt = isExempt
+                        ? 0
+                        : Math.min(
+                            remoteStd.totalDebt !== undefined ? remoteStd.totalDebt : 999999,
+                            std.totalDebt !== undefined ? std.totalDebt : 999999
+                          );
+                      if (mergedDebt === 999999) mergedDebt = 0;
+
+                      const baseStd = (remoteRenewLog && !localRenewLog)
+                        ? { ...std, ...remoteStd }
+                        : { ...remoteStd, ...std };
+
                       const candidate: Student = {
-                        ...remoteStd,
-                        ...std,
+                        ...baseStd,
                         isExempt,
                         totalPaid: maxPaid,
                         totalDebt: mergedDebt,
                         attendanceLogs: mergedLogs,
                         attendedSessions: mergedAttended,
-                        totalSessions: std.totalSessions || remoteStd.totalSessions || 5,
+                        totalSessions: (remoteRenewLog && !localRenewLog)
+                          ? (remoteStd.totalSessions || std.totalSessions || 4)
+                          : (std.totalSessions || remoteStd.totalSessions || 4),
                       };
 
                       studentMap.set(std.id, reconcileStudentFinancials(candidate, monthlyPrice));
@@ -667,16 +772,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // Auto-Refresh Triggers: Initial hydration + Tab focus + Tab visibility change + Reconnection + Polling every 25s + Supabase Realtime
+  // Auto-Refresh Triggers: Initial hydration + Smart Tab focus + Reconnection + Supabase Realtime
+  // Egress Bandwidth Optimized: eliminated aggressive 25s polling and redundant focus downloads
   useEffect(() => {
     refreshData(true);
 
-    const handleFocus = () => {
-      refreshData(true);
-    };
-
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
+    const handleFocusOrVisibility = () => {
+      // Only refetch on focus/visibility if at least 5 minutes have passed since last fetch
+      if (document.visibilityState === 'visible' && Date.now() - lastFetchTimeRef.current >= 5 * 60 * 1000) {
         refreshData(true);
       }
     };
@@ -685,21 +788,26 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       refreshData(false);
     };
 
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocusOrVisibility);
+    document.addEventListener('visibilitychange', handleFocusOrVisibility);
     window.addEventListener('online', handleOnline);
 
+    // Passive fallback interval: only runs every 15 minutes as safety net instead of aggressive 25 seconds
     const interval = setInterval(() => {
       if (typeof navigator !== 'undefined' && navigator.onLine && document.visibilityState === 'visible') {
-        refreshData(true);
+        if (Date.now() - lastFetchTimeRef.current >= 15 * 60 * 1000) {
+          refreshData(true);
+        }
       }
-    }, 25000);
+    }, 15 * 60 * 1000);
 
     // Supabase Realtime listener with debounce for smooth multi-user synchronization
     let realtimeTimeout: any = null;
     const triggerDebouncedRefresh = () => {
       if (realtimeTimeout) clearTimeout(realtimeTimeout);
       realtimeTimeout = setTimeout(() => {
+        // Reset lastFetchTimeRef so real-time updates from other computers are not blocked by the throttle
+        lastFetchTimeRef.current = 0;
         refreshData(true);
       }, 1500);
     };
@@ -744,8 +852,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .subscribe();
 
     return () => {
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocusOrVisibility);
+      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
       window.removeEventListener('online', handleOnline);
       clearInterval(interval);
       if (realtimeTimeout) clearTimeout(realtimeTimeout);
@@ -1093,6 +1201,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const payoutTeacher = (teacherId: string, amount: number, paymentMethod: string = 'نقداً (Cash)', notes: string = '') => {
+    markLocalWrite();
     const newPayoutLog: TeacherPayoutLog = {
       id: `payout-${Date.now()}`,
       amount,
@@ -1100,6 +1209,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       paymentMethod,
       notes,
     };
+
+    let teacherToSync: Teacher | null = null;
 
     setRawTeachers((prev) => {
       const updated = prev.map((t) => {
@@ -1109,16 +1220,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             schoolId: t.schoolId || currentSchool.id,
             payoutHistory: [newPayoutLog, ...(t.payoutHistory || [])],
           };
-          safeSync.upsertTeacher(updatedTeacher, currentSchool.id);
+          teacherToSync = updatedTeacher;
           return updatedTeacher;
         }
         return t;
       });
       return updated;
     });
+
+    if (teacherToSync) {
+      safeSync.upsertTeacher(teacherToSync, currentSchool.id);
+    }
   };
 
   const deleteTeacherPayout = (teacherId: string, payoutId: string) => {
+    markLocalWrite();
+    let teacherToSync: Teacher | null = null;
+
     setRawTeachers((prev) => {
       const updated = prev.map((t) => {
         if (t.id === teacherId) {
@@ -1127,13 +1245,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             schoolId: t.schoolId || currentSchool.id,
             payoutHistory: (t.payoutHistory || []).filter((p) => p.id !== payoutId),
           };
-          safeSync.upsertTeacher(updatedTeacher, currentSchool.id);
+          teacherToSync = updatedTeacher;
           return updatedTeacher;
         }
         return t;
       });
       return updated;
     });
+
+    if (teacherToSync) {
+      safeSync.upsertTeacher(teacherToSync, currentSchool.id);
+    }
   };
 
   const resetTeacherPayroll = (teacherId: string): { resetStudentsCount: number; remainingStudentsCount: number } => {
@@ -1600,6 +1722,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     studentId: string,
     options?: { method?: 'rfid' | 'manual' | 'barcode'; notes?: string; force?: boolean }
   ) => {
+    markLocalWrite();
     let studentName = '';
     let attended = 0;
     let total = 5;
@@ -1685,6 +1808,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     isCounted: boolean,
     notes?: string
   ) => {
+    markLocalWrite();
     let studentName = '';
     let attended = 0;
     let total = 5;
@@ -1748,6 +1872,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     isCounted: boolean,
     notes?: string
   ): { count: number; updatedStudents: string[] } => {
+    markLocalWrite();
     if (!studentIds || studentIds.length === 0) return { count: 0, updatedStudents: [] };
 
     const idSet = new Set(studentIds);
@@ -1926,26 +2051,44 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     courseId: string,
     studentId: string,
     newTotalSessions: number,
-    paidAmount: number
+    paidAmount: number,
+    customCoursePrice?: number,
+    markTodayAttended: boolean = true
   ) => {
+    markLocalWrite();
+
     let overageDeducted = 0;
     let startingAttended = 0;
 
     const course = currentSchoolCourses.find((c) => c.id === courseId);
     const targetStudent = course?.enrolledList?.find((s) => s.id === studentId);
-    const coursePrice =
-      targetStudent?.coursePrice !== undefined && targetStudent.coursePrice > 0
-        ? targetStudent.coursePrice
-        : course?.monthlyPrice || 6000;
-    const addedDebt = Math.max(0, coursePrice - paidAmount);
 
+    const effectiveCoursePrice =
+      customCoursePrice !== undefined && customCoursePrice > 0
+        ? customCoursePrice
+        : targetStudent?.coursePrice !== undefined && targetStudent.coursePrice > 0
+        ? targetStudent.coursePrice
+        : course?.monthlyPrice || 1500;
+
+    const addedDebt = Math.max(0, effectiveCoursePrice - paidAmount);
     const renewReceiptNo = `REC-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    let courseToSync: Course | null = null;
+    let studentFullName = targetStudent?.fullName || 'تلميذ';
+    let studentPhone = targetStudent?.phone || '';
+    let courseTitle = course?.title || 'دورة تعليمية';
 
     setCourses((prev) => {
       const updated = prev.map((c) => {
         if (c.id === courseId) {
+          courseTitle = c.title || courseTitle;
           const updatedList = (c.enrolledList || []).map((std) => {
             if (std.id === studentId) {
+              studentFullName = std.fullName || studentFullName;
+              studentPhone = std.phone || studentPhone;
               const currentAttended = std.attendedSessions || 0;
               const currentTotal =
                 std.totalSessions && std.totalSessions > 0
@@ -1961,24 +2104,49 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               overageDeducted = hasOnlySingleSessions ? 0 : Math.max(0, currentAttended - currentTotal);
               startingAttended = overageDeducted;
 
-              const now = new Date();
+              // Check if student already attended today
+              const existingTodayLog = (std.attendanceLogs || []).find(
+                (l) => l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session')
+              );
+              // Filter out existing today attendance log to prevent ANY duplicate
+              const cleanLogsWithoutTodayAttendance = (std.attendanceLogs || []).filter(
+                (l) => !(l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session'))
+              );
+
+              const shouldMarkSession1 = markTodayAttended || !!existingTodayLog;
+
               const renewalLog: SessionAttendanceLog = {
                 id: `renew-${Date.now()}`,
                 sessionNumber: 0,
-                date: now.toISOString().split('T')[0],
+                date: todayStr,
                 time: now.toTimeString().split(' ')[0].substring(0, 5),
                 status: 'renewed',
                 type: 'renewed',
-                notes: `تجديد باقة اشتراك جديدة (${newTotalSessions} حصص)`,
+                notes: `تجديد باقة اشتراك جديدة (${newTotalSessions} حصص) بسعر ${effectiveCoursePrice.toLocaleString('fr-DZ')} دج`,
               };
 
-              const logsToAdd: SessionAttendanceLog[] = [renewalLog];
+              const logsToAdd: SessionAttendanceLog[] = [];
+
+              // If session 1 is marked as attended today
+              if (shouldMarkSession1) {
+                startingAttended = Math.max(startingAttended, 1);
+                logsToAdd.push({
+                  id: existingTodayLog?.id || `log-att-${Date.now()}`,
+                  sessionNumber: 1,
+                  date: todayStr,
+                  time: existingTodayLog?.time || timeStr,
+                  status: 'present',
+                  type: 'present',
+                  notes: 'تسجيل حضور الحصة الأولى من الدورة الجديدة (مجدد اليوم)',
+                  method: existingTodayLog?.method || 'manual',
+                });
+              }
 
               if (paidAmount > 0) {
-                logsToAdd.unshift({
+                logsToAdd.push({
                   id: `log-pay-${Date.now()}`,
                   sessionNumber: 0,
-                  date: now.toISOString().split('T')[0],
+                  date: todayStr,
                   time: now.toTimeString().split(' ')[0].substring(0, 5),
                   status: 'payment',
                   type: 'payment',
@@ -1988,20 +2156,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 });
               }
 
+              logsToAdd.push(renewalLog);
+
               const updatedStd: Student = {
                 ...std,
+                coursePrice: effectiveCoursePrice,
                 totalSessions: newTotalSessions,
                 attendedSessions: startingAttended,
                 totalPaid: (std.totalPaid || 0) + paidAmount,
-                totalDebt: (std.totalDebt || 0) + addedDebt,
-                attendanceLogs: [...logsToAdd, ...(std.attendanceLogs || [])],
+                totalDebt: addedDebt,
+                attendanceLogs: [...logsToAdd, ...cleanLogsWithoutTodayAttendance],
               };
-              return reconcileStudentFinancials(updatedStd, coursePrice);
+              return reconcileStudentFinancials(updatedStd, effectiveCoursePrice);
             }
             return std;
           });
           const updatedCourse: Course = { ...c, schoolId: c.schoolId || currentSchool.id, enrolledList: updatedList };
-          safeSync.upsertCourse(updatedCourse, c.schoolId || currentSchool.id);
+          courseToSync = updatedCourse;
           return updatedCourse;
         }
         return c;
@@ -2009,45 +2180,66 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return updated;
     });
 
-    // If there is newly added debt on renewal, record it in debts
+    if (courseToSync) {
+      safeSync.upsertCourse(courseToSync, (courseToSync as Course).schoolId || currentSchool.id);
+    }
+
+    // Clear out any old debt records for this student in this course from Supabase and local state
+    const oldDebtsToDelete = debts.filter(
+      (d) => d.studentId === studentId && (d.courseTitle === courseTitle || !d.courseTitle)
+    );
+    oldDebtsToDelete.forEach((oldDebt) => {
+      addDeletedDebtId(oldDebt.id);
+      safeSync.deleteDebt(oldDebt.id, currentSchool.id);
+    });
+
     if (addedDebt > 0) {
-      const student = course?.enrolledList?.find((s) => s.id === studentId);
       const newDebt: DebtRecord = {
         id: `dbt-${Date.now()}`,
         schoolId: currentSchool.id,
         studentId,
-        studentName: student?.fullName || 'تلميذ',
-        studentPhone: student?.phone || '',
-        courseTitle: course?.title || 'دورة تعليمية',
-        totalAmount: coursePrice,
+        studentName: studentFullName,
+        studentPhone: studentPhone,
+        courseTitle: courseTitle,
+        totalAmount: effectiveCoursePrice,
         paidAmount: paidAmount,
         remainingAmount: addedDebt,
         dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         status: paidAmount > 0 ? 'partial' : 'unpaid',
       };
-      setDebts((prev) => [newDebt, ...prev]);
+      setDebts((prev) => [newDebt, ...prev.filter((d) => !oldDebtsToDelete.some((od) => od.id === d.id))]);
       safeSync.upsertDebt(newDebt, currentSchool.id);
+    } else {
+      setDebts((prev) => prev.filter((d) => !oldDebtsToDelete.some((od) => od.id === d.id)));
     }
 
-    // Record payment transaction (Cash only)
+    // Record payment transaction (Cash only) with duplicate prevention guard
     if (paidAmount > 0) {
-      const student = course?.enrolledList?.find((s) => s.id === studentId);
-      const newTx: PaymentTransaction = {
-        id: `tx-${Date.now()}`,
-        schoolId: currentSchool.id,
-        receiptNumber: renewReceiptNo,
-        studentId,
-        studentName: student?.fullName || 'تلميذ',
-        courseTitle: course?.title || 'دورة تعليمية',
-        amount: paidAmount,
-        paymentMethod: 'cash',
-        date: new Date().toISOString().split('T')[0],
-        status: 'completed',
-        recordedBy: 'إدارة المؤسسة',
-        notes: 'تجديد اشتراك باقة حصص جديدة',
-      };
-      setTransactions((prev) => [newTx, ...prev]);
-      safeSync.insertTransaction(newTx, currentSchool.id);
+      const isRecentDuplicate = transactions.some(
+        (t) =>
+          t.studentId === studentId &&
+          t.amount === paidAmount &&
+          t.date === todayStr &&
+          t.notes?.includes('تجديد اشتراك')
+      );
+      if (!isRecentDuplicate) {
+        const newTx: PaymentTransaction = {
+          id: `tx-${Date.now()}`,
+          schoolId: currentSchool.id,
+          receiptNumber: renewReceiptNo,
+          studentId,
+          studentName: studentFullName,
+          courseTitle: courseTitle,
+          amount: paidAmount,
+          paymentMethod: 'cash',
+          date: todayStr,
+          status: 'completed',
+          recordedBy: 'إدارة المؤسسة',
+          notes: 'تجديد اشتراك باقة حصص جديدة',
+        };
+        setTransactions((prev) => [newTx, ...prev]);
+        safeSync.insertTransaction(newTx, currentSchool.id);
+      }
     }
 
     return {
@@ -2067,7 +2259,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     customDate?: string,
     notes?: string
   ) => {
+    markLocalWrite();
+
     let studentName = '';
+    let studentPhone = '';
     let courseTitle = 'دورة تعليمية';
     let previousSingleSessionsCount = 0;
     let teacherEarnedFromSingles = 0;
@@ -2080,6 +2275,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const dateStr = customDate || now.toISOString().split('T')[0];
     const timeStr = now.toTimeString().split(' ')[0].substring(0, 5);
 
+    let courseToSync: Course | null = null;
+
     setCourses((prev) => {
       const updated = prev.map((c) => {
         if (c.id === courseId) {
@@ -2087,6 +2284,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const updatedList = (c.enrolledList || []).map((std) => {
             if (std.id === studentId) {
               studentName = std.fullName;
+              studentPhone = std.phone || '';
               const singleLogs = (std.attendanceLogs || []).filter(
                 (l) => l.status === 'single_session' || l.type === 'single_session'
               );
@@ -2134,7 +2332,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             return std;
           });
           const updatedCourse: Course = { ...c, schoolId: c.schoolId || currentSchool.id, enrolledList: updatedList };
-          safeSync.upsertCourse(updatedCourse, c.schoolId || currentSchool.id);
+          courseToSync = updatedCourse;
           return updatedCourse;
         }
         return c;
@@ -2142,16 +2340,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return updated;
     });
 
+    if (courseToSync) {
+      safeSync.upsertCourse(courseToSync, (courseToSync as Course).schoolId || currentSchool.id);
+    }
+
     // Record debt if partial payment
     if (addedDebt > 0) {
-      const student = course?.enrolledList?.find((s) => s.id === studentId);
       const newDebt: DebtRecord = {
         id: `dbt-${Date.now()}`,
         schoolId: currentSchool.id,
         studentId,
-        studentName: student?.fullName || studentName || 'تلميذ',
-        studentPhone: student?.phone || '',
-        courseTitle: course?.title || 'دورة تعليمية',
+        studentName: studentName || 'تلميذ',
+        studentPhone: studentPhone,
+        courseTitle: courseTitle,
         totalAmount: coursePrice,
         paidAmount: paidAmount,
         remainingAmount: addedDebt,
@@ -2164,14 +2365,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Record transaction
     if (paidAmount > 0) {
-      const student = course?.enrolledList?.find((s) => s.id === studentId);
       const newTx: PaymentTransaction = {
         id: `tx-${Date.now()}`,
         schoolId: currentSchool.id,
         receiptNumber: receiptNo,
         studentId,
-        studentName: student?.fullName || studentName || 'تلميذ',
-        courseTitle: course?.title || 'دورة تعليمية',
+        studentName: studentName || 'تلميذ',
+        courseTitle: courseTitle,
         amount: paidAmount,
         paymentMethod: 'cash',
         date: dateStr,
@@ -2199,11 +2399,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const undoStudentAttendance = (courseId: string, studentId: string) => {
+    markLocalWrite();
     let studentName = '';
     let actionDescription = '';
     let newAttended = 0;
     let total = 5;
     let found = false;
+    let courseToSync: Course | null = null;
 
     setCourses((prev) => {
       const updated = prev.map((c) => {
@@ -2263,8 +2465,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
           if (found) {
             const updatedCourse: Course = { ...c, schoolId: c.schoolId || currentSchool.id, enrolledList: updatedList };
-            lastLocalWriteRef.current = Date.now();
-            safeSync.upsertCourse(updatedCourse, c.schoolId || currentSchool.id, { skipMerge: true });
+            courseToSync = updatedCourse;
             return updatedCourse;
           }
         }
@@ -2272,6 +2473,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
       return updated;
     });
+
+    if (courseToSync) {
+      safeSync.upsertCourse(courseToSync, (courseToSync as Course).schoolId || currentSchool.id, { skipMerge: true });
+    }
 
     if (!found) return null;
 
@@ -2292,6 +2497,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     notes?: string,
     customDate?: string
   ) => {
+    markLocalWrite();
     let studentName = '';
     let attended = 0;
     let total = 5;
@@ -2301,6 +2507,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const receiptNumber = `REC-SS-${Date.now().toString().slice(-6)}`;
 
     let courseTitle = 'دورة تعليمية';
+    let courseToSync: Course | null = null;
 
     setCourses((prev) => {
       const updated = prev.map((c) => {
@@ -2334,13 +2541,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             return std;
           });
           const updatedCourse: Course = { ...c, schoolId: c.schoolId || currentSchool.id, enrolledList: updatedList };
-          safeSync.upsertCourse(updatedCourse, c.schoolId || currentSchool.id);
+          courseToSync = updatedCourse;
           return updatedCourse;
         }
         return c;
       });
       return updated;
     });
+
+    if (courseToSync) {
+      safeSync.upsertCourse(courseToSync, (courseToSync as Course).schoolId || currentSchool.id);
+    }
 
     if (sessionPrice > 0) {
       const newTx: PaymentTransaction = {
@@ -2656,7 +2867,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const archiveFinancialCycle = (archivedTxIds?: string[], archivedExpenseIds?: string[]) => {
+    markLocalWrite();
     const now = new Date();
+    const teachersToSync: Teacher[] = [];
 
     // 1. Settle all teachers belonging to current school (freeze cumulative earnings into settledEarned)
     setRawTeachers((prev) => {
@@ -2682,12 +2895,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             lastSettledDate: now.toISOString().split('T')[0],
             payoutHistory: [settlementLog, ...(t.payoutHistory || [])],
           };
-          safeSync.upsertTeacher(updatedTeacher, currentSchool.id);
+          teachersToSync.push(updatedTeacher);
           return updatedTeacher;
         }
         return t;
       });
       return updated;
+    });
+
+    teachersToSync.forEach((ut) => {
+      safeSync.upsertTeacher(ut, currentSchool.id);
     });
 
     // 2. Clear/archive transactions for this school that were included in the archive
@@ -2708,6 +2925,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const addExpense = (expenseData: Omit<Expense, 'id' | 'receiptNumber'>): Expense => {
+    markLocalWrite();
     const id = `exp-${Date.now()}`;
     const randomSeq = Math.floor(1000 + Math.random() * 9000);
     const receiptNumber = `EXP-${new Date().getFullYear()}-${randomSeq}`;
@@ -2725,6 +2943,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const deleteExpense = (expenseId: string) => {
+    markLocalWrite();
     setExpenses((prev) => prev.filter((e) => e.id !== expenseId));
     safeSync.deleteExpense(expenseId);
   };

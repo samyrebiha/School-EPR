@@ -217,3 +217,17 @@ export interface Expense {
   paymentMethod?: string;
   notes?: string;
 }
+
+export type NotificationType = 'update' | 'announcement' | 'info' | 'alert';
+
+export interface AppNotification {
+  id: string;
+  schoolId?: string | null;
+  title: string;
+  message: string;
+  type?: NotificationType;
+  sender?: string;
+  isActive?: boolean;
+  createdAt: string;
+}
+
