@@ -611,10 +611,47 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
 
   // Course subscription paid: paid full course subscription (separated from single session) and owes no debt
   const isStudentPaid = (std: Student) => !isStudentSingleSession(std) && (std.isExempt || (std.totalDebt || 0) <= 0);
-  // Full debtor: did not pay anything towards subscription (totalPaid <= 0 and totalDebt > 0)
-  const isStudentDebtor = (std: Student) => !std.isExempt && (std.totalDebt || 0) > 0 && (std.totalPaid || 0) <= 0;
-  // Partial debtor: paid partially but still owes debt (totalPaid > 0 and totalDebt > 0)
-  const isStudentPartialDebtor = (std: Student) => !std.isExempt && (std.totalDebt || 0) > 0 && (std.totalPaid || 0) > 0;
+
+  // Helper to calculate payments made specifically in the active subscription cycle
+  const getStudentCyclePaid = (std: Student): number => {
+    const logs = std.attendanceLogs || [];
+    const latestRenewalIdx = logs.findIndex(
+      (l) => l && (l.status === 'renewed' || l.type === 'renewed')
+    );
+    if (latestRenewalIdx !== -1) {
+      const renewalLog = logs[latestRenewalIdx];
+      const renewalDate = renewalLog?.date;
+      return logs
+        .filter((l, idx) => {
+          if (!l || (l.status !== 'payment' && l.type !== 'payment')) return false;
+          if (idx < latestRenewalIdx) return true;
+          if (renewalDate && l.date === renewalDate && (l.notes?.includes('تجديد') || l.notes?.includes('اشتراك') || l.receiptNumber)) return true;
+          return false;
+        })
+        .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+    }
+    const paymentLogs = logs.filter((l) => l && (l.status === 'payment' || l.type === 'payment'));
+    const paidFromLogs = paymentLogs.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+    return Math.max(paidFromLogs, (std.totalDebt || 0) > 0 ? (std.totalPaid || 0) : (std.totalPaid || 0));
+  };
+
+  // Full debtor: owes debt and paid 0 in this cycle (غير خالص)
+  const isStudentDebtor = (std: Student) => {
+    if (std.isExempt) return false;
+    const debt = std.totalDebt || 0;
+    if (debt <= 0) return false;
+    const cyclePaid = getStudentCyclePaid(std);
+    return cyclePaid <= 0;
+  };
+
+  // Partial debtor: paid partially in this cycle but still owes debt (متبقي في الذمة)
+  const isStudentPartialDebtor = (std: Student) => {
+    if (std.isExempt) return false;
+    const debt = std.totalDebt || 0;
+    if (debt <= 0) return false;
+    const cyclePaid = getStudentCyclePaid(std);
+    return cyclePaid > 0;
+  };
 
   // Helper to count student total absences (counted + uncounted)
   const getStudentAbsenceCount = (std: Student): number => {
@@ -1132,6 +1169,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
   const [debtPayDate, setDebtPayDate] = useState('');
   const [debtPayNotes, setDebtPayNotes] = useState('');
   const [autoDeleteFromDebts, setAutoDeleteFromDebts] = useState(true);
+  const isDebtPaySubmittingRef = useRef(false);
 
   interface DebtReceiptData {
     receiptNumber: string;
@@ -1351,82 +1389,91 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
 
   const handleConfirmPayDebt = (e?: React.FormEvent, andPrint = false) => {
     if (e) e.preventDefault();
-    if (!studentToPayDebt || !activeCourse) return;
+    if (!studentToPayDebt || !activeCourse || isDebtPaySubmittingRef.current) return;
 
-    const amt = Number(debtPayAmount) || 0;
-    if (amt <= 0) {
-      warning('يرجى إدخال مبلغ صحيح لتسديد الدين.', 'المبلغ غير صحيح');
-      return;
-    }
+    isDebtPaySubmittingRef.current = true;
+    try {
+      const amt = Number(debtPayAmount) || 0;
+      if (amt <= 0) {
+        warning('يرجى إدخال مبلغ صحيح لتسديد الدين.', 'المبلغ غير صحيح');
+        isDebtPaySubmittingRef.current = false;
+        return;
+      }
 
-    const currentDebt = studentToPayDebt.totalDebt || 0;
-    const coursePrice = activeCourse.monthlyPrice || 0;
-    const maxAllowed = Math.min(currentDebt, coursePrice > 0 ? coursePrice : currentDebt);
+      const currentDebt = studentToPayDebt.totalDebt || 0;
+      const coursePrice = activeCourse.monthlyPrice || 0;
+      const maxAllowed = Math.min(currentDebt, coursePrice > 0 ? coursePrice : currentDebt);
 
-    // Prevent paying more than the debt or course price to prevent mistakes
-    if (amt > maxAllowed) {
-      warning(
-        `المبلغ المدخل (${formatDZD(amt)}) يتجاوز الحد الأقصى المسموح (${formatDZD(maxAllowed)}) لتجنب الأخطاء.`,
-        'تجاوز الحد الأقصى'
-      );
-      return;
-    }
+      // Prevent paying more than the debt or course price to prevent mistakes
+      if (amt > maxAllowed) {
+        warning(
+          `المبلغ المدخل (${formatDZD(amt)}) يتجاوز الحد الأقصى المسموح (${formatDZD(maxAllowed)}) لتجنب الأخطاء.`,
+          'تجاوز الحد الأقصى'
+        );
+        isDebtPaySubmittingRef.current = false;
+        return;
+      }
 
-    const isFullyPaid = amt >= currentDebt;
-    // Crucial: Only delete the debt record if it was fully paid off!
-    const shouldDeleteDebt = isFullyPaid;
+      const isFullyPaid = amt >= currentDebt;
+      // Crucial: Only delete the debt record if it was fully paid off!
+      const shouldDeleteDebt = isFullyPaid;
 
-    const receiptNo = `REC-DEBT-${Date.now().toString().slice(-6)}`;
-    const now = new Date();
-    const dateStr = debtPayDate || now.toISOString().split('T')[0];
-    const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      const receiptNo = `REC-DEBT-${Date.now().toString().slice(-6)}`;
+      const now = new Date();
+      const dateStr = debtPayDate || now.toISOString().split('T')[0];
+      const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 
-    // 1. تسجيل المعاملة وتحديث حساب الطالب والدين ذرياً دون أي تعارض في التزامن
-    const newTx = {
-      id: `tx-debt-${Date.now()}`,
-      receiptNumber: receiptNo,
-      studentId: studentToPayDebt.id,
-      studentName: studentToPayDebt.fullName,
-      courseTitle: activeCourse.title,
-      amount: amt,
-      paymentMethod: 'cash' as const,
-      date: dateStr,
-      status: 'completed' as const,
-      recordedBy: 'إدارة المؤسسة',
-      notes: debtPayNotes.trim() || 'تسديد دين مستحقات الدورة نقداً',
-    };
-
-    recordPayment(newTx, studentToPayDebt.id, undefined, { autoDeleteDebt: shouldDeleteDebt });
-
-    const prevStudent = studentToPayDebt;
-    setStudentToPayDebt(null);
-
-    if (isFullyPaid) {
-      success(
-        `تم تسديد الدين بالكامل للتلميذ "${prevStudent.fullName}" بقيمة ${formatDZD(amt)} وتحديث حسابه إلى خالص!`,
-        'تم تسديد الدين'
-      );
-    } else {
-      const remainingDebt = Math.max(0, currentDebt - amt);
-      success(
-        `تم تسديد دفعة بقيمة ${formatDZD(amt)} للتلميذ "${prevStudent.fullName}". متبقي في الذمة ${formatDZD(remainingDebt)}.`,
-        'تسديد دفعة من الدين'
-      );
-    }
-
-    if (andPrint) {
-      handlePrintDebtPaymentReceipt({
+      // 1. تسجيل المعاملة وتحديث حساب الطالب والدين ذرياً دون أي تعارض في التزامن
+      const newTx = {
+        id: `tx-debt-${Date.now()}`,
         receiptNumber: receiptNo,
-        studentName: prevStudent.fullName,
-        studentPhone: prevStudent.phone,
+        studentId: studentToPayDebt.id,
+        studentName: studentToPayDebt.fullName,
         courseTitle: activeCourse.title,
-        teacherName: activeCourse.teacherName,
-        paidAmount: amt,
-        remainingDebt: Math.max(0, currentDebt - amt),
+        amount: amt,
+        paymentMethod: 'cash' as const,
         date: dateStr,
-        time: timeStr,
-        notes: debtPayNotes.trim(),
-      });
+        status: 'completed' as const,
+        recordedBy: 'إدارة المؤسسة',
+        notes: debtPayNotes.trim() || 'تسديد دين مستحقات الدورة نقداً',
+      };
+
+      recordPayment(newTx, studentToPayDebt.id, undefined, { autoDeleteDebt: shouldDeleteDebt });
+
+      const prevStudent = studentToPayDebt;
+      setStudentToPayDebt(null);
+
+      if (isFullyPaid) {
+        success(
+          `تم تسديد الدين بالكامل للتلميذ "${prevStudent.fullName}" بقيمة ${formatDZD(amt)} وتحديث حسابه إلى خالص!`,
+          'تم تسديد الدين'
+        );
+      } else {
+        const remainingDebt = Math.max(0, currentDebt - amt);
+        success(
+          `تم تسديد دفعة بقيمة ${formatDZD(amt)} للتلميذ "${prevStudent.fullName}". متبقي في الذمة ${formatDZD(remainingDebt)}.`,
+          'تسديد دفعة من الدين'
+        );
+      }
+
+      if (andPrint) {
+        handlePrintDebtPaymentReceipt({
+          receiptNumber: receiptNo,
+          studentName: prevStudent.fullName,
+          studentPhone: prevStudent.phone,
+          courseTitle: activeCourse.title,
+          teacherName: activeCourse.teacherName,
+          paidAmount: amt,
+          remainingDebt: Math.max(0, currentDebt - amt),
+          date: dateStr,
+          time: timeStr,
+          notes: debtPayNotes.trim(),
+        });
+      }
+    } finally {
+      setTimeout(() => {
+        isDebtPaySubmittingRef.current = false;
+      }, 1500);
     }
   };
 
@@ -4184,7 +4231,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                 متبقي في الذمة ({formatDZD(std.totalDebt)})
                               </Badge>
                               <span style={{ fontSize: '0.6875rem', color: '#ea580c', fontWeight: 600 }}>
-                                المدفوع: {formatDZD(std.totalPaid || 0)}
+                                المسدد: {formatDZD(getStudentCyclePaid(std))}
                               </span>
                             </div>
                           ) : isFullDebtor ? (
@@ -4199,7 +4246,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                   whiteSpace: 'nowrap',
                                 }}
                               >
-                                غير مسدد ({formatDZD(std.totalDebt)})
+                                غير خالص ({formatDZD(std.totalDebt)})
                               </Badge>
                             </div>
                           ) : isSingleSession ? (
@@ -4237,13 +4284,15 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                               const isAlreadyAttendedToday = validation.blockReason === 'already_attended_today';
                               const isDebtBlocked = validation.blockReason === 'debt_second_session';
                               const isCooldownBlocked = validation.blockReason === 'cooldown_2h';
+                              const isSessionsExceeded = validation.blockReason === 'sessions_exceeded';
                               const isBlocked = !validation.allowed;
 
                               return (
                                 <Button
-                                  variant={isAlreadyAttendedToday ? 'secondary' : isExceeded ? 'danger' : isBlocked ? 'secondary' : 'primary'}
+                                  variant={isAlreadyAttendedToday ? 'secondary' : (isExceeded || isSessionsExceeded) ? 'danger' : isBlocked ? 'secondary' : 'primary'}
                                   size="sm"
                                   onClick={() => handleIncrement(std.id)}
+                                  disabled={isSessionsExceeded}
                                   rightIcon={<CheckCircle2 size={14} color={isAlreadyAttendedToday ? '#16a34a' : undefined} />}
                                   style={
                                     isAlreadyAttendedToday
@@ -4252,6 +4301,14 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                           backgroundColor: '#f0fdf4',
                                           color: '#166534',
                                           fontWeight: 700,
+                                        }
+                                      : isSessionsExceeded
+                                      ? {
+                                          opacity: 0.6,
+                                          borderColor: '#fca5a5',
+                                          backgroundColor: '#fef2f2',
+                                          color: '#b91c1c',
+                                          cursor: 'not-allowed',
                                         }
                                       : isBlocked
                                       ? {
@@ -4265,6 +4322,8 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                   title={
                                     isAlreadyAttendedToday
                                       ? `التلميذ حاضر بالفعل لليوم الساعة ${validation.lastAttendanceTime}. يُمنع تسجيل حضور مكرر لنفس اليوم.`
+                                      : isSessionsExceeded
+                                      ? `انتهت حصص الاشتراك (${attended}/${total}). يجب إعادة الاشتراك أولاً لتسجيل أي حصة جديدة.`
                                       : isDebtBlocked
                                       ? `ممنوع التسجيل: التلميذ في ذمته دين (${formatDZD(std.totalDebt)}) ودرس حصته الأولى المسموحة. يجب تسديد الدين لتسجيل الحصة الثانية.`
                                       : isCooldownBlocked
@@ -4272,7 +4331,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                       : 'تسجيل حضور حصة جديدة'
                                   }
                                 >
-                                  {isAlreadyAttendedToday ? 'حاضر اليوم' : `+ حضور (${attended + 1})`}
+                                  {isAlreadyAttendedToday ? 'حاضر اليوم' : isSessionsExceeded ? '🔒 منتهي' : `+ حضور (${attended + 1})`}
                                 </Button>
                               );
                             })()}
@@ -4855,7 +4914,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                               متبقي في الذمة: {formatDZD(std.totalDebt)}
                             </Badge>
                             <span style={{ fontSize: '0.6875rem', color: '#ea580c', fontWeight: 600 }}>
-                              المدفوع: {formatDZD(std.totalPaid || 0)}
+                              المسدد: {formatDZD(getStudentCyclePaid(std))}
                             </span>
                           </div>
                         ) : isFullDebtor ? (
@@ -4869,7 +4928,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            غير مسدد: {formatDZD(std.totalDebt)}
+                            غير خالص: {formatDZD(std.totalDebt)}
                           </Badge>
                         ) : isSingleSession ? (
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
@@ -4914,13 +4973,15 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                           const isAlreadyAttendedToday = validation.blockReason === 'already_attended_today';
                           const isDebtBlocked = validation.blockReason === 'debt_second_session';
                           const isCooldownBlocked = validation.blockReason === 'cooldown_2h';
+                          const isSessionsExceeded = validation.blockReason === 'sessions_exceeded';
                           const isBlocked = !validation.allowed;
 
                           return (
                             <Button
-                              variant={isAlreadyAttendedToday ? 'secondary' : isExceeded ? 'danger' : isBlocked ? 'secondary' : 'primary'}
+                              variant={isAlreadyAttendedToday ? 'secondary' : (isExceeded || isSessionsExceeded) ? 'danger' : isBlocked ? 'secondary' : 'primary'}
                               className="attendance-primary-btn"
                               onClick={() => handleIncrement(std.id)}
+                              disabled={isSessionsExceeded}
                               rightIcon={<CheckCircle2 size={15} color={isAlreadyAttendedToday ? '#16a34a' : undefined} />}
                               style={{
                                 flex: 1,
@@ -4934,6 +4995,14 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                       color: '#166534',
                                       fontWeight: 700,
                                     }
+                                  : isSessionsExceeded
+                                  ? {
+                                      opacity: 0.6,
+                                      borderColor: '#fca5a5',
+                                      backgroundColor: '#fef2f2',
+                                      color: '#b91c1c',
+                                      cursor: 'not-allowed',
+                                    }
                                   : isBlocked
                                   ? {
                                       opacity: 0.85,
@@ -4946,6 +5015,8 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                               title={
                                 isAlreadyAttendedToday
                                   ? `التلميذ حاضر بالفعل لليوم الساعة ${validation.lastAttendanceTime}. يُمنع تسجيل حضور مكرر لنفس اليوم.`
+                                  : isSessionsExceeded
+                                  ? `انتهت حصص الاشتراك (${attended}/${total}). يجب إعادة الاشتراك أولاً لتسجيل أي حصة جديدة.`
                                   : isDebtBlocked
                                   ? `ممنوع التسجيل: التلميذ في ذمته دين (${formatDZD(std.totalDebt)}) ودرس حصته الأولى المسموحة. يجب تسديد الدين لتسجيل الحصة الثانية.`
                                   : isCooldownBlocked
@@ -4953,7 +5024,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                   : 'تسجيل حضور حصة جديدة'
                               }
                             >
-                              {isAlreadyAttendedToday ? 'حاضر اليوم' : `+ حضور (${attended + 1})`}
+                              {isAlreadyAttendedToday ? 'حاضر اليوم' : isSessionsExceeded ? '🔒 منتهي' : `+ حضور (${attended + 1})`}
                             </Button>
                           );
                         })()}

@@ -3,7 +3,7 @@ import { formatDZD } from './formatters';
 
 export interface AttendanceValidationResult {
   allowed: boolean;
-  blockReason?: 'already_attended_today' | 'cooldown_2h' | 'debt_second_session';
+  blockReason?: 'already_attended_today' | 'cooldown_2h' | 'debt_second_session' | 'sessions_exceeded';
   errorTitle?: string;
   errorMessage?: string;
   warningMessage?: string;
@@ -140,7 +140,18 @@ export function validateStudentAttendanceRegistration(
   const hasDebt = !student.isExempt && totalDebt > 0;
   const attendedSessions = student.attendedSessions || 0;
 
-  // 2. Debt Rule: Can study only ONE session if in debt. If attendedSessions >= 1, second session cannot be recorded.
+  // 2. Sessions Exceeded Rule: student consumed all subscription sessions → require renewal first.
+  const totalSessions = student.totalSessions || 0;
+  if (!student.isExempt && totalSessions > 1 && attendedSessions >= totalSessions) {
+    return {
+      allowed: false,
+      blockReason: 'sessions_exceeded' as const,
+      errorTitle: 'انتهت حصص الاشتراك - تجديد مطلوب',
+      errorMessage: `التلميذ "${student.fullName}" استهلك كامل حصص اشتراكه (${attendedSessions}/${totalSessions}). يجب إعادة الاشتراك قبل تسجيل أي حصة جديدة.`,
+    };
+  }
+
+  // 3. Debt Rule: Can study only ONE session if in debt. If attendedSessions >= 1, second session cannot be recorded.
   if (hasDebt && attendedSessions >= 1) {
     return {
       allowed: false,

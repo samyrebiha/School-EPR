@@ -81,23 +81,46 @@ export const NotificationBell: React.FC = () => {
 
   // Initial fetch and Realtime subscription
   useEffect(() => {
-    fetchNotifications();
+    // Attempt one fetch; if the table doesn't exist the fetch already swallows the error
+    // and we set a flag to skip the realtime subscription entirely.
+    let tableExists = true;
 
-    // Subscribe to Supabase Realtime changes
-    const channel = supabase
-      .channel('realtime:app_notifications')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'app_notifications' },
-        () => {
-          fetchNotifications();
+    const initialFetch = async () => {
+      try {
+        const { error } = await supabase
+          .from('app_notifications')
+          .select('id')
+          .limit(1);
+        if (error) {
+          tableExists = false; // Table doesn't exist yet – skip subscription silently
+          return;
         }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
+      } catch {
+        tableExists = false;
+        return;
+      }
+      fetchNotifications();
     };
+
+    initialFetch().then(() => {
+      if (!tableExists) return;
+
+      // Only subscribe if the table was confirmed to exist
+      const channel = supabase
+        .channel('realtime:app_notifications')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'app_notifications' },
+          () => {
+            fetchNotifications();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    });
   }, [currentSchool?.id]);
 
   // Close dropdown on outside click

@@ -81,17 +81,24 @@ export function reconcileStudentFinancials(
   if (latestRenewalIdx !== -1) {
     // Student has a renewal log (cycle reset or new package)
     if (currentCyclePaid >= basePrice) {
+      // Current cycle fully paid
       currentDebt = 0;
     } else if (currentCyclePaid > 0) {
+      // Partial payment in current cycle
       currentDebt = Math.max(0, basePrice - currentCyclePaid);
-    } else if (actualPaid >= basePrice && currentDebt > 0 && (currentDebt + actualPaid === 3500 || basePrice <= 1500)) {
-      // Repair artifact where debt 2000 was calculated from old 3500 course price
-      currentDebt = 0;
-    } else if (currentDebt <= 0 && (student.totalDebt === undefined || student.totalDebt <= 0)) {
-      currentDebt = 0;
     } else {
-      // Unpaid renewal cycle (keeps set debt or defaults to basePrice)
-      currentDebt = currentDebt > 0 ? currentDebt : basePrice;
+      // Zero payments in current cycle:
+      // Keep the explicitly set debt (e.g. renewal with 0 paid = full price owed)
+      // but do NOT fallback to basePrice if debt is already correctly set.
+      if (currentDebt > 0) {
+        // Debt was explicitly set (e.g. by renewStudentSubscription) – keep it
+        currentDebt = currentDebt;
+      } else if (student.totalDebt === undefined || student.totalDebt < 0) {
+        currentDebt = 0;
+      } else {
+        // No debt recorded and no payment in cycle → still owe the full price
+        currentDebt = basePrice;
+      }
     }
   } else {
     // Initial cycle (no renewals yet)

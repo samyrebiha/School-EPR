@@ -25,12 +25,11 @@ export const NetworkProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
 
     try {
-      // Lightweight fetch with no-cache and short timeout to check real network connectivity
+      // Lightweight connectivity check using our own Supabase endpoint (avoids SSL/CORS issues with dns.google)
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3500);
 
-      // Using a reliable, lightweight public endpoint or origin check
-      const res = await fetch(`https://dns.google/resolve?name=google.com&type=A&_t=${Date.now()}`, {
+      const res = await fetch(`https://twegemzosourhldeueqf.supabase.co/rest/v1/?_t=${Date.now()}`, {
         method: 'GET',
         mode: 'cors',
         cache: 'no-store',
@@ -38,9 +37,10 @@ export const NetworkProvider: React.FC<{ children: ReactNode }> = ({ children })
       }).catch(() => null);
 
       clearTimeout(timeoutId);
-      return !!(res && (res.ok || res.status === 200));
+      // Any response (even 4xx) means network is live
+      return !!(res && res.status > 0);
     } catch {
-      // Fallback to navigator.onLine if external ping blocked by CORS
+      // Fallback to navigator.onLine if external ping is blocked
       return typeof navigator !== 'undefined' ? navigator.onLine : true;
     }
   }, []);

@@ -75,7 +75,7 @@ export interface DataContextType {
     isExceeded: boolean;
     log?: SessionAttendanceLog;
     blocked?: boolean;
-    blockReason?: 'already_attended_today' | 'cooldown_2h' | 'debt_second_session';
+    blockReason?: 'already_attended_today' | 'cooldown_2h' | 'debt_second_session' | 'sessions_exceeded';
     errorMessage?: string;
     errorTitle?: string;
   };
@@ -255,6 +255,8 @@ const removeDeletedDebtId = (id: string) => {
 
 // Global in-memory idempotency guard to prevent rapid double-renewals
 const recentRenewalsTracker = new Map<string, { time: number; result: any }>();
+// Global in-memory guard to prevent duplicate payments submitted in a short time
+const recentPaymentsTracker = new Map<string, number>();
 
 export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [schools, setSchools] = useState<SchoolTenant[]>(() => storage.getSchools());
@@ -2692,13 +2694,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     targetDebtId?: string,
     options?: { autoDeleteDebt?: boolean }
   ) => {
+    const targetStudentId = updateDebtStudentId || transaction.studentId;
+    const targetStudentName = transaction.studentName?.trim();
+
+    // 🛡️ Rapid duplicate payment prevention: block identical payment registered within 3.5 seconds
+    const payKey = `${targetStudentId || targetStudentName}_${transaction.amount}_${transaction.courseTitle || ''}`;
+    const lastPayTime = recentPaymentsTracker.get(payKey);
+    const nowPayTime = Date.now();
+    if (lastPayTime && nowPayTime - lastPayTime < 3500) {
+      console.warn('🛡️ Blocked rapid duplicate payment registration for', targetStudentName || targetStudentId);
+      return;
+    }
+    recentPaymentsTracker.set(payKey, nowPayTime);
+
     markLocalWrite();
     const txWithSchool: PaymentTransaction = { ...transaction, schoolId: currentSchool.id };
     setTransactions((prev) => [txWithSchool, ...prev]);
     safeSync.insertTransaction(txWithSchool, currentSchool.id);
-
-    const targetStudentId = updateDebtStudentId || transaction.studentId;
-    const targetStudentName = transaction.studentName?.trim();
 
     // 1. Update student's financial records in course and add payment log
     let updatedCourseToSync: Course | null = null;

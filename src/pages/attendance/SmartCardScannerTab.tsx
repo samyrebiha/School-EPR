@@ -355,7 +355,11 @@ export const SmartCardScannerTab: React.FC<SmartCardScannerTabProps> = ({
           timeStr: validation.lastAttendanceTime || timeFormatted,
           message:
             validation.blockReason === 'debt_second_session'
-              ? '🚫 مرفوض: لا يمكن تسجيل الحصة الثانية للتلميذ!'
+              ? '🚫 مرفوض: لا يمكن تسجيل الحصة الثانية للتلميذ لوجود دين!'
+              : validation.blockReason === 'sessions_exceeded'
+              ? '🔒 مرفوض: انتهت حصص الاشتراك - تجديد مطلوب!'
+              : validation.blockReason === 'already_attended_today'
+              ? '⚠️ التلميذ حاضر بالفعل لهذا اليوم!'
               : '⚠️ تكرار التسجيل غير مسموح (قفل الساعتين)!',
           subMessage: validation.errorMessage || 'التسجيل غير متاح حالياً.',
           sessionNumber: matchedStudent.attendedSessions || 1,
