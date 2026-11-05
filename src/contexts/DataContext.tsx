@@ -75,7 +75,7 @@ export interface DataContextType {
     isExceeded: boolean;
     log?: SessionAttendanceLog;
     blocked?: boolean;
-    blockReason?: 'cooldown_2h' | 'debt_second_session';
+    blockReason?: 'already_attended_today' | 'cooldown_2h' | 'debt_second_session';
     errorMessage?: string;
     errorTitle?: string;
   };
@@ -1771,7 +1771,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           total: existingStudent.totalSessions || 4,
           isExceeded: false,
           blocked: true,
-          blockReason: 'already_attended_today',
+          blockReason: 'already_attended_today' as const,
           errorMessage: `التلميذ "${existingStudent.fullName}" مسجل حضوره بالفعل لهذا اليوم الساعة ${existingTodayLog.time || ''}. يُمنع منعاً باتاً تسجيل حضور ثانٍ لنفس التلميذ في نفس اليوم سواء بالبطاقة أو يدوياً!`,
           errorTitle: 'التلميذ حاضر بالفعل اليوم',
         };

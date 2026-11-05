@@ -1355,28 +1355,6 @@ export const Courses: React.FC<CoursesProps> = ({
                   </div>
                 </div>
               </div>
-              {onNavigate && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsEnrollModalOpen(false);
-                    onNavigate('payments');
-                  }}
-                  style={{
-                    background: '#fef3c7',
-                    border: '1px solid #f59e0b',
-                    color: '#92400e',
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    padding: '6px 10px',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  تسجيل الحقوق الآن
-                </button>
-              )}
             </div>
           ) : null}
 
