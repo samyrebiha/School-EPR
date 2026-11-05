@@ -1094,6 +1094,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
   const [renewPaidAmount, setRenewPaidAmount] = useState('1500');
   const [renewMarkTodayAttended, setRenewMarkTodayAttended] = useState(true);
   const [isRenewSubmitting, setIsRenewSubmitting] = useState(false);
+  const isRenewSubmittingRef = useRef(false);
 
   // Simple Renewal Receipt State
   interface RenewalReceiptData {
@@ -1528,6 +1529,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
 
   // Open Renew Modal
   const openRenewModal = (student: Student) => {
+    isRenewSubmittingRef.current = false;
     setStudentToRenew(student);
     const defaultSessions =
       student.totalSessions && student.totalSessions > 0
@@ -2316,8 +2318,10 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
   // Execute Subscription Renewal & Automatically Deduct Overages
   const handleRenew = (e: React.FormEvent, shouldPrint: boolean = false) => {
     e.preventDefault();
-    if (!studentToRenew || !activeCourse || isRenewSubmitting) return;
+    if (!studentToRenew || !activeCourse || isRenewSubmitting || isRenewSubmittingRef.current) return;
 
+    // 🛡️ Synchronous ref lock immediately stops double-clicks
+    isRenewSubmittingRef.current = true;
     setIsRenewSubmitting(true);
     try {
       const defaultSessions =
@@ -2336,6 +2340,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
           `المبلغ المسدد (${formatDZD(paidVal)}) لا يمكن أن يتجاوز سعر الدورة المحدد (${formatDZD(customPrice)}) كحد أقصى لتجنب الأخطاء.`,
           'تجاوز مبلغ الدورة'
         );
+        isRenewSubmittingRef.current = false;
         setIsRenewSubmitting(false);
         return;
       }
@@ -2365,27 +2370,30 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
 
       setStudentToRenew(null);
 
-    if (shouldPrint) {
-      handlePrintSimpleRenewalReceipt(receiptData);
-    } else {
-      setPrintedReceipt(receiptData);
-    }
+      if (shouldPrint) {
+        handlePrintSimpleRenewalReceipt(receiptData);
+      } else {
+        setPrintedReceipt(receiptData);
+      }
 
-    if (res.overageDeducted > 0) {
-      success(
-        `تم تجديد اشتراك التلميذ "${studentToRenew.fullName}" بنجاح! تم اقتطاع ${res.overageDeducted} حصص متجاوزة (رصيد الحصص الحالي: ${res.startingAttended}/${newPackageSessions}). رقم الوصل: ${res.receiptNumber}`,
-        'تم التجديد واقتطاع التجاوز'
-      );
-    } else {
-      success(
-        `تم تجديد اشتراك التلميذ "${studentToRenew.fullName}" بـ ${newPackageSessions} حصص جديدة بنجاح! رصيد الحصص: ${res.startingAttended}/${newPackageSessions}. رقم الوصل: ${res.receiptNumber}`,
-        'تم التجديد'
-      );
+      if (res.overageDeducted > 0) {
+        success(
+          `تم تجديد اشتراك التلميذ "${studentToRenew.fullName}" بنجاح! تم اقتطاع ${res.overageDeducted} حصص متجاوزة (رصيد الحصص الحالي: ${res.startingAttended}/${newPackageSessions}). رقم الوصل: ${res.receiptNumber}`,
+          'تم التجديد واقتطاع التجاوز'
+        );
+      } else {
+        success(
+          `تم تجديد اشتراك التلميذ "${studentToRenew.fullName}" بـ ${newPackageSessions} حصص جديدة بنجاح! رصيد الحصص: ${res.startingAttended}/${newPackageSessions}. رقم الوصل: ${res.receiptNumber}`,
+          'تم التجديد'
+        );
+      }
+    } finally {
+      setTimeout(() => {
+        isRenewSubmittingRef.current = false;
+        setIsRenewSubmitting(false);
+      }, 1000);
     }
-  } finally {
-    setIsRenewSubmitting(false);
-  }
-};
+  };
 
   // Direct 1-Click Print / Export Course Attendance Sheet (PDF)
   const handlePrintCourseAttendanceSheet = () => {
@@ -4226,18 +4234,26 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             {(() => {
                               const validation = validateStudentAttendanceRegistration(std);
-                              const isBlocked = !validation.allowed;
+                              const isAlreadyAttendedToday = validation.blockReason === 'already_attended_today';
                               const isDebtBlocked = validation.blockReason === 'debt_second_session';
                               const isCooldownBlocked = validation.blockReason === 'cooldown_2h';
+                              const isBlocked = !validation.allowed;
 
                               return (
                                 <Button
-                                  variant={isExceeded ? 'danger' : isBlocked ? 'secondary' : 'primary'}
+                                  variant={isAlreadyAttendedToday ? 'secondary' : isExceeded ? 'danger' : isBlocked ? 'secondary' : 'primary'}
                                   size="sm"
                                   onClick={() => handleIncrement(std.id)}
-                                  rightIcon={<CheckCircle2 size={14} />}
+                                  rightIcon={<CheckCircle2 size={14} color={isAlreadyAttendedToday ? '#16a34a' : undefined} />}
                                   style={
-                                    isBlocked
+                                    isAlreadyAttendedToday
+                                      ? {
+                                          borderColor: '#86efac',
+                                          backgroundColor: '#f0fdf4',
+                                          color: '#166534',
+                                          fontWeight: 700,
+                                        }
+                                      : isBlocked
                                       ? {
                                           opacity: 0.85,
                                           borderColor: isDebtBlocked ? '#fca5a5' : '#fed7aa',
@@ -4247,14 +4263,16 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                       : undefined
                                   }
                                   title={
-                                    isDebtBlocked
+                                    isAlreadyAttendedToday
+                                      ? `التلميذ حاضر بالفعل لليوم الساعة ${validation.lastAttendanceTime}. يُمنع تسجيل حضور مكرر لنفس اليوم.`
+                                      : isDebtBlocked
                                       ? `ممنوع التسجيل: التلميذ في ذمته دين (${formatDZD(std.totalDebt)}) ودرس حصته الأولى المسموحة. يجب تسديد الدين لتسجيل الحصة الثانية.`
                                       : isCooldownBlocked
                                       ? `تكرار التسجيل غير مسموح: يجب انتظار ساعتين من تسجيل الحصة الأولى (متبقي ${validation.remainingMinutes} دقيقة)`
                                       : 'تسجيل حضور حصة جديدة'
                                   }
                                 >
-                                  + حضور ({attended + 1})
+                                  {isAlreadyAttendedToday ? 'حاضر اليوم' : `+ حضور (${attended + 1})`}
                                 </Button>
                               );
                             })()}
@@ -4893,22 +4911,30 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', width: '100%' }}>
                         {(() => {
                           const validation = validateStudentAttendanceRegistration(std);
-                          const isBlocked = !validation.allowed;
+                          const isAlreadyAttendedToday = validation.blockReason === 'already_attended_today';
                           const isDebtBlocked = validation.blockReason === 'debt_second_session';
                           const isCooldownBlocked = validation.blockReason === 'cooldown_2h';
+                          const isBlocked = !validation.allowed;
 
                           return (
                             <Button
-                              variant={isExceeded ? 'danger' : isBlocked ? 'secondary' : 'primary'}
+                              variant={isAlreadyAttendedToday ? 'secondary' : isExceeded ? 'danger' : isBlocked ? 'secondary' : 'primary'}
                               className="attendance-primary-btn"
                               onClick={() => handleIncrement(std.id)}
-                              rightIcon={<CheckCircle2 size={15} />}
+                              rightIcon={<CheckCircle2 size={15} color={isAlreadyAttendedToday ? '#16a34a' : undefined} />}
                               style={{
                                 flex: 1,
                                 justifyContent: 'center',
                                 fontSize: '0.75rem',
                                 padding: '6px 4px',
-                                ...(isBlocked
+                                ...(isAlreadyAttendedToday
+                                  ? {
+                                      borderColor: '#86efac',
+                                      backgroundColor: '#f0fdf4',
+                                      color: '#166534',
+                                      fontWeight: 700,
+                                    }
+                                  : isBlocked
                                   ? {
                                       opacity: 0.85,
                                       borderColor: isDebtBlocked ? '#fca5a5' : '#fed7aa',
@@ -4918,14 +4944,16 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
                                   : {}),
                               }}
                               title={
-                                isDebtBlocked
+                                isAlreadyAttendedToday
+                                  ? `التلميذ حاضر بالفعل لليوم الساعة ${validation.lastAttendanceTime}. يُمنع تسجيل حضور مكرر لنفس اليوم.`
+                                  : isDebtBlocked
                                   ? `ممنوع التسجيل: التلميذ في ذمته دين (${formatDZD(std.totalDebt)}) ودرس حصته الأولى المسموحة. يجب تسديد الدين لتسجيل الحصة الثانية.`
                                   : isCooldownBlocked
                                   ? `تكرار التسجيل غير مسموح: يجب انتظار ساعتين من تسجيل الحصة الأولى (متبقي ${validation.remainingMinutes} دقيقة)`
                                   : 'تسجيل حضور حصة جديدة'
                               }
                             >
-                              + حضور ({attended + 1})
+                              {isAlreadyAttendedToday ? 'حاضر اليوم' : `+ حضور (${attended + 1})`}
                             </Button>
                           );
                         })()}
@@ -5207,7 +5235,7 @@ export const Attendance: React.FC<AttendanceProps> = ({ initialViewMode }) => {
             setIsEnrollModalOpen(true);
           }}
           onOpenRenewModal={(student) => {
-            setStudentToRenew(student);
+            openRenewModal(student);
           }}
         />
       ) : (

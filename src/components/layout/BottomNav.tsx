@@ -5,16 +5,14 @@ import {
   GraduationCap,
   CheckSquare,
   Plus,
-  DollarSign,
   UserPlus,
   BookOpen,
   DoorOpen,
-  FileBarChart,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
-export type QuickActionType = 'payment' | 'course' | 'teacher' | 'room' | 'reports';
+export type QuickActionType = 'course' | 'teacher' | 'room';
 
 export interface BottomNavProps {
   activePage: string;
@@ -123,20 +121,6 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               <button
                 type="button"
                 className="mobile-quick-action-btn"
-                onClick={() => handleAction('payment')}
-              >
-                <div className="mobile-quick-action-icon" style={{ backgroundColor: 'var(--color-success-bg)', color: 'var(--color-success)' }}>
-                  <DollarSign size={22} color="var(--color-success)" />
-                </div>
-                <div className="mobile-quick-action-text">
-                  <div className="mobile-quick-action-title">تسجيل دفع نقداً</div>
-                  <div className="mobile-quick-action-desc">فتح سند قبض فوري للتلميذ</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                className="mobile-quick-action-btn"
                 onClick={() => handleAction('course')}
               >
                 <div className="mobile-quick-action-icon" style={{ backgroundColor: 'var(--color-primary-light)', color: 'var(--color-primary)' }}>
@@ -175,24 +159,6 @@ export const BottomNav: React.FC<BottomNavProps> = ({
                   <div className="mobile-quick-action-desc">فتح نموذج إضافة قاعة وتجهيزاتها</div>
                 </div>
               </button>
-
-
-
-              {!isReceptionMode && (
-                <button
-                  type="button"
-                  className="mobile-quick-action-btn"
-                  onClick={() => handleAction('reports')}
-                >
-                  <div className="mobile-quick-action-icon" style={{ backgroundColor: 'rgba(23, 107, 103, 0.1)', color: 'var(--color-primary)' }}>
-                    <FileBarChart size={22} color="var(--color-primary)" />
-                  </div>
-                  <div className="mobile-quick-action-text">
-                    <div className="mobile-quick-action-title">التقارير والإحصائيات</div>
-                    <div className="mobile-quick-action-desc">استخراج وطباعة تقرير PDF</div>
-                  </div>
-                </button>
-              )}
             </div>
           </div>
         </div>

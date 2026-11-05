@@ -6,8 +6,6 @@ import {
   Building2,
   CheckCircle2,
   CreditCard,
-  Wallet,
-  BarChart3,
   Settings,
   BookOpen,
   School,
@@ -93,41 +91,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
       ],
     },
-    {
-      groupLabel: 'المالية وسندات القبض',
-      items: [
-        {
-          id: 'payments',
-          label: isReceptionMode ? 'تسجيل وسندات القبض' : 'المدفوعات والخزينة',
-          icon: <CreditCard size={18} />,
-        },
-        // Admin only
-        ...(!isReceptionMode
-          ? [
-              {
-                id: 'payroll',
-                label: 'مستحقات الأساتذة',
-                icon: <Wallet size={18} />,
-              },
-            ]
-          : []),
-      ],
-    },
-    // Admin only: Analytics
-    ...(!isReceptionMode
-      ? [
-          {
-            groupLabel: 'التحليلات',
-            items: [
-              {
-                id: 'reports',
-                label: 'التقارير والإحصائيات',
-                icon: <BarChart3 size={18} />,
-              },
-            ],
-          },
-        ]
-      : []),
     // Settings accessible to both Admin and Reception
     {
       groupLabel: '',

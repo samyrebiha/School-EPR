@@ -107,6 +107,7 @@ export const SmartCardScannerTab: React.FC<SmartCardScannerTabProps> = ({
   // Scan Popup Modal State
   const [popupData, setPopupData] = useState<ScanResultCardData | null>(null);
   const popupTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastProcessedScanRef = useRef<{ code: string; time: number }>({ code: '', time: 0 });
 
   const showScanPopup = (data: ScanResultCardData) => {
     setLastScanResult(data);
@@ -292,6 +293,16 @@ export const SmartCardScannerTab: React.FC<SmartCardScannerTabProps> = ({
   const handleProcessCardCode = (rawCode: string) => {
     const code = rawCode.trim();
     if (!code) return;
+
+    // 🛡️ Guard against rapid duplicate scanner pulses / Enter collisions within 1.2s
+    const nowMs = Date.now();
+    if (
+      lastProcessedScanRef.current.code.toLowerCase() === code.toLowerCase() &&
+      nowMs - lastProcessedScanRef.current.time < 1200
+    ) {
+      return;
+    }
+    lastProcessedScanRef.current = { code, time: nowMs };
 
     setScanPulse(true);
     setTimeout(() => setScanPulse(false), 500);

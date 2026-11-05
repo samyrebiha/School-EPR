@@ -253,6 +253,9 @@ const removeDeletedDebtId = (id: string) => {
   }
 };
 
+// Global in-memory idempotency guard to prevent rapid double-renewals
+const recentRenewalsTracker = new Map<string, { time: number; result: any }>();
+
 export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [schools, setSchools] = useState<SchoolTenant[]>(() => storage.getSchools());
   const [currentSchoolId, setCurrentSchoolIdState] = useState<string>(() => storage.getCurrentSchoolId());
@@ -595,13 +598,35 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                       const isExempt = !!(remoteStd.isExempt || std.isExempt);
                       const maxPaid = Math.max(remoteStd.totalPaid || 0, std.totalPaid || 0);
 
-                      const mergedLogs = Array.from(logMap.values()).sort((a, b) => {
+                      const rawSorted = Array.from(logMap.values()).sort((a, b) => {
                         const dateComp = (b.date || '').localeCompare(a.date || '');
                         if (dateComp !== 0) return dateComp;
                         const timeComp = (b.time || '').localeCompare(a.time || '');
                         if (timeComp !== 0) return timeComp;
                         return (b.id || '').localeCompare(a.id || '');
                       });
+
+                      // 🛡️ Deduplicate on merge: Keep at most 1 session log per date, and 1 renewal log per date
+                      const seenSessionDates = new Set<string>();
+                      const seenRenewDates = new Set<string>();
+                      const mergedLogs: SessionAttendanceLog[] = [];
+
+                      for (const log of rawSorted) {
+                        if (!log) continue;
+                        const st = log.status || log.type;
+                        const date = log.date || '';
+                        if (st === 'renewed') {
+                          if (date && seenRenewDates.has(date)) continue;
+                          if (date) seenRenewDates.add(date);
+                          mergedLogs.push(log);
+                        } else if (st === 'present' || st === 'absent_counted' || st === 'single_session') {
+                          if (date && seenSessionDates.has(date)) continue;
+                          if (date) seenSessionDates.add(date);
+                          mergedLogs.push(log);
+                        } else {
+                          mergedLogs.push(log);
+                        }
+                      }
 
                       const latestRenewLog = mergedLogs.find((l) => l && (l.status === 'renewed' || l.type === 'renewed'));
                       let activeCycleSessions = 0;
@@ -1729,23 +1754,43 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     let createdLog: SessionAttendanceLog | undefined;
     let courseToSync: Course | null = null;
 
-    // Pre-check attendance validation (Debt rule & 2-hour cooldown)
+    // Pre-check attendance validation (Debt rule & 2-hour cooldown & Same-day duplicate guard)
+    const todayStr = new Date().toISOString().split('T')[0];
     const existingCourse = courses.find((c) => c.id === courseId);
     const existingStudent = existingCourse?.enrolledList?.find((s) => s.id === studentId);
 
-    if (existingStudent && !options?.force) {
-      const validation = validateStudentAttendanceRegistration(existingStudent);
-      if (!validation.allowed) {
+    if (existingStudent) {
+      // 🛡️ Ironclad Same-day Duplicate Guard (Applies to both RFID cards AND Manual clicks)
+      const existingTodayLog = (existingStudent.attendanceLogs || []).find(
+        (l) => l && l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session')
+      );
+      if (existingTodayLog) {
         return {
           studentName: existingStudent.fullName,
           attended: existingStudent.attendedSessions || 0,
-          total: existingStudent.totalSessions || 5,
+          total: existingStudent.totalSessions || 4,
           isExceeded: false,
           blocked: true,
-          blockReason: validation.blockReason,
-          errorMessage: validation.errorMessage,
-          errorTitle: validation.errorTitle,
+          blockReason: 'already_attended_today',
+          errorMessage: `التلميذ "${existingStudent.fullName}" مسجل حضوره بالفعل لهذا اليوم الساعة ${existingTodayLog.time || ''}. يُمنع منعاً باتاً تسجيل حضور ثانٍ لنفس التلميذ في نفس اليوم سواء بالبطاقة أو يدوياً!`,
+          errorTitle: 'التلميذ حاضر بالفعل اليوم',
         };
+      }
+
+      if (!options?.force) {
+        const validation = validateStudentAttendanceRegistration(existingStudent);
+        if (!validation.allowed) {
+          return {
+            studentName: existingStudent.fullName,
+            attended: existingStudent.attendedSessions || 0,
+            total: existingStudent.totalSessions || 5,
+            isExceeded: false,
+            blocked: true,
+            blockReason: validation.blockReason,
+            errorMessage: validation.errorMessage,
+            errorTitle: validation.errorTitle,
+          };
+        }
       }
     }
 
@@ -1754,6 +1799,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (c.id === courseId) {
           const updatedList = (c.enrolledList || []).map((std) => {
             if (std.id === studentId) {
+              // Internal secondary guard: never push duplicate today attendance log
+              const hasTodayLog = (std.attendanceLogs || []).some(
+                (l) => l && l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session')
+              );
+              if (hasTodayLog) return std;
+
               studentName = std.fullName;
               attended = (std.attendedSessions || 0) + 1;
               total = std.totalSessions || 5;
@@ -1767,7 +1818,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 time: timeStr,
                 status: 'present',
                 type: 'present',
-                notes: options?.notes || (options?.method === 'rfid' ? 'تسجيل حضور تلقائي عبر البطاقة الذكية (RFID)' : 'تسجيل حضور'),
+                notes: options?.notes || (options?.method === 'rfid' ? 'تسجيل حضور تلقائي عبر البطاقة الذكية (RFID)' : 'تسجيل حضور يدوي'),
                 method: options?.method || 'manual',
               };
               createdLog = newLog;
@@ -1819,17 +1870,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (c.id === courseId) {
           const updatedList = (c.enrolledList || []).map((std) => {
             if (std.id === studentId) {
+              const now = new Date();
+              const todayStr = now.toISOString().split('T')[0];
+              // 🛡️ Guard: student cannot be marked absent if already recorded present today!
+              const alreadyPresentToday = (std.attendanceLogs || []).some(
+                (l) => l && l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session')
+              );
+              if (alreadyPresentToday) return std;
+
               studentName = std.fullName;
               total = std.totalSessions || 5;
               // If counted, consumes 1 session of quota (counted towards teacher earnings)
               attended = isCounted ? (std.attendedSessions || 0) + 1 : (std.attendedSessions || 0);
 
-              const now = new Date();
               const status: AttendanceLogStatus = isCounted ? 'absent_counted' : 'absent_uncounted';
               const newLog: SessionAttendanceLog = {
                 id: `log-${Date.now()}`,
                 sessionNumber: isCounted ? attended : (std.attendedSessions || 0),
-                date: now.toISOString().split('T')[0],
+                date: todayStr,
                 time: now.toTimeString().split(' ')[0].substring(0, 5),
                 status,
                 type: status,
@@ -1888,6 +1946,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (c.id === courseId) {
           const updatedList = (c.enrolledList || []).map((std) => {
             if (idSet.has(std.id)) {
+              // 🛡️ Skip if student already has a recorded attendance or absence today!
+              const alreadyMarkedToday = (std.attendanceLogs || []).some(
+                (l) => l && l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session' || l.status === 'absent_counted' || l.status === 'absent_uncounted')
+              );
+              if (alreadyMarkedToday) return std;
+
               updatedNames.push(std.fullName);
               const total = std.totalSessions || 5;
               const attended = isCounted ? (std.attendedSessions || 0) + 1 : (std.attendedSessions || 0);
@@ -2055,6 +2119,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     customCoursePrice?: number,
     markTodayAttended: boolean = true
   ) => {
+    // 🛡️ Idempotency Guard: Synchronously block duplicate renewals within 8 seconds
+    const idempotencyKey = `${courseId}_${studentId}`;
+    const lastRenewal = recentRenewalsTracker.get(idempotencyKey);
+    const nowMs = Date.now();
+    if (lastRenewal && nowMs - lastRenewal.time < 8000) {
+      return lastRenewal.result;
+    }
+
     markLocalWrite();
 
     let overageDeducted = 0;
@@ -2108,10 +2180,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               const existingTodayLog = (std.attendanceLogs || []).find(
                 (l) => l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session')
               );
-              // Filter out existing today attendance log to prevent ANY duplicate
-              const cleanLogsWithoutTodayAttendance = (std.attendanceLogs || []).filter(
-                (l) => !(l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session'))
-              );
+
+              // Filter out duplicate today attendance and any duplicate renewal logs created in the last 2 minutes
+              const cleanLogs = (std.attendanceLogs || []).filter((l) => {
+                if (!l) return false;
+                const isTodayAtt = l.date === todayStr && (l.status === 'present' || l.type === 'present' || l.status === 'single_session');
+                const isRecentRenew = (l.status === 'renewed' || l.type === 'renewed') && l.date === todayStr;
+                return !isTodayAtt && !isRecentRenew;
+              });
 
               const shouldMarkSession1 = markTodayAttended || !!existingTodayLog;
 
@@ -2165,7 +2241,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 attendedSessions: startingAttended,
                 totalPaid: (std.totalPaid || 0) + paidAmount,
                 totalDebt: addedDebt,
-                attendanceLogs: [...logsToAdd, ...cleanLogsWithoutTodayAttendance],
+                attendanceLogs: [...logsToAdd, ...cleanLogs],
               };
               return reconcileStudentFinancials(updatedStd, effectiveCoursePrice);
             }
@@ -2242,13 +2318,20 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    return {
+    const finalResult = {
       overageDeducted,
       startingAttended,
       receiptNumber: renewReceiptNo,
       addedDebt,
       paidAmount,
     };
+
+    recentRenewalsTracker.set(idempotencyKey, {
+      time: Date.now(),
+      result: finalResult,
+    });
+
+    return finalResult;
   };
 
   const convertSingleSessionToCourse = (

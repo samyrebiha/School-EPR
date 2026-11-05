@@ -37,14 +37,9 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
     ? courses.filter((c) => c.title.toLowerCase().includes(q) || c.subject.toLowerCase().includes(q))
     : [];
 
-  const matchedPayments = q
-    ? transactions.filter((p) => p.receiptNumber.toLowerCase().includes(q) || p.studentName.toLowerCase().includes(q))
-    : [];
-
   const hasResults =
     matchedTeachers.length > 0 ||
-    matchedCourses.length > 0 ||
-    matchedPayments.length > 0;
+    matchedCourses.length > 0;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -203,40 +198,6 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2-5)' }}>
                         <BookOpen size={16} color="var(--color-primary)" />
                         <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>{c.title}</span>
-                      </div>
-                      <ArrowLeft size={14} color="var(--color-text-muted)" />
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Payments */}
-              {matchedPayments.length > 0 && (
-                <div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>
-                    المدفوعات والإيصالات ({matchedPayments.length})
-                  </div>
-                  {matchedPayments.map((p) => (
-                    <div
-                      key={p.id}
-                      onClick={() => {
-                        onNavigate('payments');
-                        onClose();
-                      }}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: 'var(--space-2) var(--space-3)',
-                        borderRadius: 'var(--radius-md)',
-                        cursor: 'pointer',
-                        minHeight: '40px',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2-5)' }}>
-                        <CreditCard size={16} color="var(--color-primary)" />
-                        <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>{p.receiptNumber}</span>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{p.studentName}</span>
                       </div>
                       <ArrowLeft size={14} color="var(--color-text-muted)" />
                     </div>

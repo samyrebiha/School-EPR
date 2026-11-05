@@ -1,23 +1,23 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   GraduationCap,
   BookOpen,
-  DollarSign,
-  AlertCircle,
   PlusCircle,
-  CreditCard,
   Clock,
   MapPin,
   Users,
   Settings,
+  CheckCircle2,
+  CreditCard,
+  Building2,
+  Calendar,
 } from 'lucide-react';
 import { PageHeader } from '../../components/layout/PageHeader';
 import { StatCard, Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { Badge } from '../../components/common/Badge';
-import { formatDZD, formatDateArabic } from '../../utils/formatters';
+import { formatDateArabic } from '../../utils/formatters';
 import { useSchool } from '../../contexts/SchoolContext';
-import { useAuth } from '../../contexts/AuthContext';
 import { useData } from '../../contexts/DataContext';
 
 export interface DashboardProps {
@@ -25,49 +25,78 @@ export interface DashboardProps {
   onOpenRecordPayment?: () => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({
-  onNavigate,
-  onOpenRecordPayment,
-}) => {
+export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const { currentSchool } = useSchool();
-  const { isReceptionMode } = useAuth();
   const {
     teachers,
     classrooms,
     courses,
-    transactions,
-    debts,
     totalEnrolledStudents,
     totalActiveCourses,
-    totalMonthlyRevenue,
-    totalOutstandingDebts,
   } = useData();
+
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  // Compute today's attendance stats across all courses
+  const todayAttendanceStats = useMemo(() => {
+    let attendedTodayCount = 0;
+    const recentActivity: Array<{
+      id: string;
+      studentName: string;
+      courseTitle: string;
+      time: string;
+      status: string;
+    }> = [];
+
+    courses.forEach((c) => {
+      (c.enrolledList || []).forEach((std) => {
+        (std.attendanceLogs || []).forEach((log) => {
+          if (log && log.date === todayStr) {
+            if (log.status === 'present' || log.type === 'present' || log.status === 'single_session') {
+              attendedTodayCount++;
+              recentActivity.push({
+                id: log.id || `${std.id}-${log.time}`,
+                studentName: std.fullName || 'تلميذ',
+                courseTitle: c.title || 'فوج دراسي',
+                time: log.time || '',
+                status: 'حاضر',
+              });
+            }
+          }
+        });
+      });
+    });
+
+    // Sort recent activity by time descending
+    recentActivity.sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+
+    return {
+      attendedTodayCount,
+      recentActivity: recentActivity.slice(0, 6),
+    };
+  }, [courses, todayStr]);
 
   return (
     <div>
       {/* Header */}
       <PageHeader
-        title={isReceptionMode ? `مكتب الاستقبال — ${currentSchool.name}` : `لوحة إدارة ${currentSchool.name}`}
-        description={
-          isReceptionMode
-            ? "العمليات اليومية الميدانية، إدارة الأفواج، الحضور والغياب، وتسجيل وصولات التلاميذ"
-            : "متابعة الدورات والأفواج، تسجيلات التلاميذ، والإيرادات المالية"
-        }
+        title={`منظومة الحضور والغياب — ${currentSchool.name}`}
+        description="إدارة الأفواج الدراسية، تسجيل الحضور عبر الماسح الذكي، ومتابعة انضباط التلاميذ الميداني"
         actions={
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
             <Button
-              variant="secondary"
-              rightIcon={<CreditCard size={16} />}
-              onClick={() => (onOpenRecordPayment ? onOpenRecordPayment() : onNavigate('payments'))}
+              variant="primary"
+              rightIcon={<CheckCircle2 size={16} />}
+              onClick={() => onNavigate('attendance')}
             >
-              تسجيل عملية دفع
+              تسجيل الحضور (الماسح الذكي)
             </Button>
             <Button
-              variant="primary"
+              variant="secondary"
               rightIcon={<PlusCircle size={16} />}
               onClick={() => onNavigate('courses')}
             >
-              إنشاء دورة أو فوج جديد
+              إنشاء فوج أو دورة
             </Button>
             <Button
               variant="outline"
@@ -92,44 +121,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
           icon={<GraduationCap size={20} />}
         />
 
-        {isReceptionMode ? (
-          <StatCard
-            title="الأساتذة والمؤطرون"
-            value={`${teachers.length} أستاذ`}
-            subtitle="طاقم التدريس النشط"
-            icon={<Users size={20} color="var(--color-info)" />}
-          />
-        ) : (
-          <StatCard
-            title="إجمالي الإيرادات المحصلة"
-            value={formatDZD(totalMonthlyRevenue)}
-            subtitle="سندات مقبوضة"
-            icon={<DollarSign size={20} />}
-          />
-        )}
+        <StatCard
+          title="حضور اليوم المسجل"
+          value={`${todayAttendanceStats.attendedTodayCount} تلميذ`}
+          subtitle="سُجّل حضورهم اليوم"
+          icon={<CheckCircle2 size={20} color="var(--color-success)" />}
+        />
 
         <StatCard
-          title="الدورات والأفواج الجماعية"
+          title="الأفواج التدريسية النشطة"
           value={`${totalActiveCourses} أفواج`}
           subtitle="أفواج تدريس نشطة"
           icon={<BookOpen size={20} color="var(--color-primary)" />}
         />
 
-        {isReceptionMode ? (
-          <StatCard
-            title="القاعات والمخابر"
-            value={`${classrooms.length} قاعة`}
-            subtitle="مساحات تدريس مجهزة"
-            icon={<MapPin size={20} color="var(--color-warning)" />}
-          />
-        ) : (
-          <StatCard
-            title="إجمالي الديون غير المحصلة"
-            value={formatDZD(totalOutstandingDebts)}
-            subtitle={`${debts.length} أقساط متأخرة`}
-            icon={<AlertCircle size={20} color="var(--color-danger)" />}
-          />
-        )}
+        <StatCard
+          title="الأساتذة والمؤطرون"
+          value={`${teachers.length} أستاذ`}
+          subtitle="طاقم التدريس المعتمد"
+          icon={<Users size={20} color="var(--color-info)" />}
+        />
       </div>
 
       {/* Quick Actions & Schedule Row */}
@@ -140,7 +151,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Today's Schedule (2 cols) */}
         <div className="col-span-2 lg:col-span-1">
           <Card
-            title="حصص اليوم وجدول القاعات"
+            title="حصص وجدول اليوم للأفواج"
             action={
               <Button variant="ghost" size="sm" onClick={() => onNavigate('schedule')}>
                 عرض الجدول الكامل
@@ -149,11 +160,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
           >
             {courses.length === 0 ? (
               <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-                لا توجد حصص مسجلة بعد. ابدأ بإنشاء دورة جديدة.
+                لا توجد حصص مسجلة بعد. ابدأ بإنشاء فوج دراسي جديد.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2-5)' }}>
-                {courses.slice(0, 3).map((course) => (
+                {courses.slice(0, 4).map((course) => (
                   <div
                     key={course.id}
                     style={{
@@ -186,18 +197,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <span>{course.teacherName}</span>
                         <span>•</span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
-                          <Clock size={13} /> {course.scheduleTime}
+                          <Clock size={13} /> {course.scheduleTime || 'غير محدد'}
                         </span>
                         <span>•</span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
-                          <MapPin size={13} /> {course.roomName}
+                          <MapPin size={13} /> {course.roomName || 'القاعة العامة'}
                         </span>
                       </div>
                     </div>
 
-                    <Badge variant="success">
-                      {course.enrolledList?.length || 0}/{course.maxStudents} تلميذ
-                    </Badge>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Badge variant="success">
+                        {course.enrolledList?.length || 0}/{course.maxStudents} تلميذ
+                      </Badge>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => onNavigate('attendance')}
+                      >
+                        الحضور
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -206,54 +226,70 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Quick Actions Widget */}
-        <Card title="إجراءات سريعة">
+        <Card title="إجراءات سريعة وميدانية">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
             <Button
+              variant="primary"
+              className="w-full justify-start"
+              rightIcon={<CheckCircle2 size={16} />}
+              onClick={() => onNavigate('attendance')}
+            >
+              تسجيل الحضور بالماسح الذكي
+            </Button>
+            <Button
               variant="secondary"
               className="w-full justify-start"
-              rightIcon={<BookOpen size={16} color="var(--color-primary)" />}
+              rightIcon={<CreditCard size={16} color="var(--color-primary)" />}
+              onClick={() => onNavigate('cards_directory')}
+            >
+              دليل بطاقات التلاميذ والباركود
+            </Button>
+            <Button
+              variant="secondary"
+              className="w-full justify-start"
+              rightIcon={<BookOpen size={16} color="var(--color-warning)" />}
               onClick={() => onNavigate('courses')}
             >
-              إنشاء دورة أو فوج جديد
+              إدارة الأفواج والدورات
             </Button>
             <Button
               variant="secondary"
               className="w-full justify-start"
-              rightIcon={<Users size={16} color="var(--color-warning)" />}
-              onClick={() => onNavigate('teachers')}
+              rightIcon={<Calendar size={16} color="var(--color-info)" />}
+              onClick={() => onNavigate('schedule')}
             >
-              إضافة أستاذ جديد
+              جدول الحصص والتوقيت
             </Button>
             <Button
               variant="secondary"
               className="w-full justify-start"
-              rightIcon={<CreditCard size={16} color="var(--color-success)" />}
-              onClick={() => (onOpenRecordPayment ? onOpenRecordPayment() : onNavigate('payments'))}
+              rightIcon={<Building2 size={16} color="var(--color-text-secondary)" />}
+              onClick={() => onNavigate('rooms')}
             >
-              تسجيل عملية دفع
+              القاعات والمخابر
             </Button>
           </div>
         </Card>
       </div>
 
-      {/* Bottom Row: Recent Transactions */}
+      {/* Bottom Row: Recent Attendance Activity */}
       <Card
-        title="آخر عمليات الدفع المسجلة"
+        title="أحدث تسجيلات الحضور اليوم"
         action={
-          <Button variant="ghost" size="sm" onClick={() => onNavigate('payments')}>
-            جميع العمليات
+          <Button variant="ghost" size="sm" onClick={() => onNavigate('attendance')}>
+            شاشة الحضور الكاملة
           </Button>
         }
       >
-        {transactions.length === 0 ? (
+        {todayAttendanceStats.recentActivity.length === 0 ? (
           <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
-            لا توجد أي عمليات دفع مسجلة حتى الآن.
+            لم يتم تسجيل أي حضور لليوم حتى الآن. ابدأ بمسح بطاقات التلاميذ أو تسجيل الحضور اليدوي.
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2-5)' }}>
-            {transactions.slice(0, 5).map((tx) => (
+            {todayAttendanceStats.recentActivity.map((act) => (
               <div
-                key={tx.id}
+                key={act.id}
                 style={{
                   padding: 'var(--space-3)',
                   backgroundColor: 'var(--color-bg-hover)',
@@ -267,19 +303,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
               >
                 <div>
                   <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                    {tx.studentName}
+                    {act.studentName}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-                    {tx.courseTitle} • {tx.receiptNumber}
+                    {act.courseTitle}
                   </div>
                 </div>
 
-                <div style={{ textAlign: 'left', flexShrink: 0 }}>
-                  <div style={{ fontSize: '0.9375rem', fontWeight: 700, color: 'var(--color-primary)' }}>
-                    {formatDZD(tx.amount)}
-                  </div>
-                  <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
-                    {formatDateArabic(tx.date)}
+                <div style={{ textAlign: 'left', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Badge variant="success">{act.status}</Badge>
+                  <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', fontWeight: 600, direction: 'ltr' }}>
+                    {act.time}
                   </div>
                 </div>
               </div>
@@ -291,3 +325,4 @@ export const Dashboard: React.FC<DashboardProps> = ({
   );
 };
 
+export default Dashboard;

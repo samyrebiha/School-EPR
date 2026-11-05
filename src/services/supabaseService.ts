@@ -323,13 +323,35 @@ export const supabaseService = {
                 localLogs.forEach((log) => {
                   if (log && log.id) logsMap.set(log.id, log);
                 });
-                const mergedLogs = Array.from(logsMap.values()).sort((a, b) => {
+                const rawSorted = Array.from(logsMap.values()).sort((a, b) => {
                   const dateComp = (b.date || '').localeCompare(a.date || '');
                   if (dateComp !== 0) return dateComp;
                   const timeComp = (b.time || '').localeCompare(a.time || '');
                   if (timeComp !== 0) return timeComp;
                   return (b.id || '').localeCompare(a.id || '');
                 });
+
+                // 🛡️ Deduplicate: Keep at most 1 session log per date, and 1 renewal log per date
+                const seenSessionDates = new Set<string>();
+                const seenRenewDates = new Set<string>();
+                const mergedLogs: SessionAttendanceLog[] = [];
+
+                for (const log of rawSorted) {
+                  if (!log) continue;
+                  const st = log.status || log.type;
+                  const date = log.date || '';
+                  if (st === 'renewed') {
+                    if (date && seenRenewDates.has(date)) continue;
+                    if (date) seenRenewDates.add(date);
+                    mergedLogs.push(log);
+                  } else if (st === 'present' || st === 'absent_counted' || st === 'single_session') {
+                    if (date && seenSessionDates.has(date)) continue;
+                    if (date) seenSessionDates.add(date);
+                    mergedLogs.push(log);
+                  } else {
+                    mergedLogs.push(log);
+                  }
+                }
 
                 const isExempt = !!(lStd.isExempt || existing.isExempt);
                 const maxPaid = Math.max(existing.totalPaid || 0, lStd.totalPaid || 0);

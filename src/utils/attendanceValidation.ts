@@ -3,7 +3,7 @@ import { formatDZD } from './formatters';
 
 export interface AttendanceValidationResult {
   allowed: boolean;
-  blockReason?: 'cooldown_2h' | 'debt_second_session';
+  blockReason?: 'already_attended_today' | 'cooldown_2h' | 'debt_second_session';
   errorTitle?: string;
   errorMessage?: string;
   warningMessage?: string;
@@ -111,11 +111,36 @@ export function validateStudentAttendanceRegistration(
     return { allowed: false, errorMessage: 'بيانات التلميذ غير متوفرة' };
   }
 
+  // 1. Strict Same-Day Guard (Applies to both RFID Cards AND Manual Clicks):
+  // A student can NEVER attend more than 1 session on the same day in the same group.
+  const todayStr = new Date(nowMs).toISOString().split('T')[0];
+  const logs = student.attendanceLogs || [];
+  const existingTodayLog = logs.find(
+    (l) =>
+      l &&
+      l.date === todayStr &&
+      (l.status === 'present' ||
+        l.type === 'present' ||
+        l.status === 'single_session' ||
+        l.type === 'single_session')
+  );
+
+  if (existingTodayLog) {
+    const timeFormatted = existingTodayLog.time || 'اليوم';
+    return {
+      allowed: false,
+      blockReason: 'already_attended_today',
+      lastAttendanceTime: timeFormatted,
+      errorTitle: 'التلميذ حاضر بالفعل اليوم',
+      errorMessage: `التلميذ "${student.fullName}" مسجل حضوره بالفعل لهذا اليوم الساعة ${timeFormatted}. يُمنع منعاً باتاً تسجيل حضور ثانٍ لنفس التلميذ في نفس اليوم سواء بالبطاقة أو يدوياً!`,
+    };
+  }
+
   const totalDebt = student.totalDebt || 0;
   const hasDebt = !student.isExempt && totalDebt > 0;
   const attendedSessions = student.attendedSessions || 0;
 
-  // 1. Debt Rule: Can study only ONE session if in debt. If attendedSessions >= 1, second session cannot be recorded.
+  // 2. Debt Rule: Can study only ONE session if in debt. If attendedSessions >= 1, second session cannot be recorded.
   if (hasDebt && attendedSessions >= 1) {
     return {
       allowed: false,
@@ -126,7 +151,7 @@ export function validateStudentAttendanceRegistration(
     };
   }
 
-  // 2. Cooldown Rule: Cannot be registered twice within 2 hours
+  // 3. Cooldown Rule: Cannot be registered twice within 2 hours
   const cooldown = checkAttendance2HourCooldown(student, nowMs);
   if (cooldown.inCooldown) {
     return {
